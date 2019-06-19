@@ -1,0 +1,12 @@
+applications:
+  - name: aws-rds-smoke-test-suite
+    buildpacks:
+      - go_buildpack
+    env:
+      DB_TYPE: oracle
+      ENABLE_FUNCTIONS: true
+      GOVERSION: go1.12
+      GOPACKAGENAME: aws-rds
+      SERVICE_NAME: rds-smoke-tests-medium-oracle-se2
+      CGO_CFLAGS: -I /app/code/vendor/include/oracle/
+    services:
