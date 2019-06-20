@@ -1,0 +1,13 @@
+databases/aws-rds/include/oracle/libnnz19.so filter=lfs diff=lfs merge=lfs -text
+databases/aws-rds/include/oracle/libocci.so.19.1 filter=lfs diff=lfs merge=lfs -text
+databases/aws-rds/include/oracle/libociei.so filter=lfs diff=lfs merge=lfs -text
+databases/aws-rds/include/oracle/libclntshcore.so.19.1 filter=lfs diff=lfs merge=lfs -text
+databases/aws-rds/include/oracle/libclntsh.so.19.1 filter=lfs diff=lfs merge=lfs -text
+databases/aws-rds/include/oracle/libipc1.so filter=lfs diff=lfs merge=lfs -text
+databases/aws-rds/vendor/golang.org/x/tools/godoc/static/static.go filter=lfs diff=lfs merge=lfs -text
+databases/aws-rds/vendor/golang.org/x/text/unicode/runenames/tables11.0.0.go filter=lfs diff=lfs merge=lfs -text
+databases/aws-rds/vendor/golang.org/x/text/unicode/runenames/tables9.0.0.go filter=lfs diff=lfs merge=lfs -text
+databases/aws-rds/vendor/golang.org/x/text/unicode/runenames/tables10.0.0.go filter=lfs diff=lfs merge=lfs -text
+databases/aws-rds/vendor/golang.org/x/text/collate/tables.go filter=lfs diff=lfs merge=lfs -text
+databases/aws-rds/vendor/golang.org/x/text/date/tables.go filter=lfs diff=lfs merge=lfs -text
+databases/aws-rds/vendor/golang.org/x/text/language/display/tables.go filter=lfs diff=lfs merge=lfs -text
