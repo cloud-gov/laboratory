@@ -1,6 +1,6 @@
 ## cloud.gov Labratory
 
-Labratory is a collection of tools, toolkits, and other accouterments that provide varying levels of value to the cloud.gov team.
+Labratory is a collection of tools, tests, and other accouterments that provide varying levels of value to the cloud.gov team. Most of these tools are apps designed to run in or around Cloud Foundry environments, but can be run as standalone tools with a bit of effort.
 
 
 | Tool | Purpose |
