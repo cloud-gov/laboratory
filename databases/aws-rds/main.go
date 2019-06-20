@@ -1,8 +1,10 @@
+// #cgo LDFLAGS: -L${SRCDIR}/include
 package main
 
 import (
 	"database/sql"
 	"fmt"
+	"net/http"
 	"os"
 	"strconv"
 
@@ -32,7 +34,10 @@ func main() {
 	case "oracle":
 		openAndTest("goracle", svc.Credentials["uri"].(string))
 	}
-	fmt.Printf("%#v", svcs)
+
+	fmt.Printf("tested %s database, things look good, starting web server now.", dbType)
+
+	http.ListenAndServe(fmt.Sprintf(":%s", os.Getenv("PORT")), nil)
 }
 
 // set up the mysql connection strings.
@@ -62,6 +67,11 @@ func openAndTest(dbType string, dsn interface{}) {
 		panic(err)
 	}
 
+	if dbType == "goracle" {
+		oracleSql(db)
+		return
+	}
+
 	// create the table.
 	if _, err := db.Exec("create table smoke (id integer, name text)"); err != nil {
 		panic(err)
@@ -83,6 +93,21 @@ func openAndTest(dbType string, dsn interface{}) {
 
 	// cleanup
 	if _, err := db.Exec("drop table smoke", 1); err != nil {
+		panic(err)
+	}
+}
+
+// because it uses different types and stuff.
+func oracleSql(db *sql.DB) {
+	if _, err := db.Exec("CREATE TABLE smoke (id integer, name varchar2(10))"); err != nil {
+		panic(err)
+	}
+
+	if _, err := db.Exec("INSERT INTO smoke VALUES (1, 'smoke')"); err != nil {
+		panic(err)
+	}
+
+	if _, err := db.Exec("DROP TABLE smoke"); err != nil {
 		panic(err)
 	}
 }

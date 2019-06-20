@@ -8,5 +8,5 @@ applications:
       GOVERSION: go1.12
       GOPACKAGENAME: aws-rds
       SERVICE_NAME: rds-smoke-tests-medium-oracle-se2
-      CGO_CFLAGS: -I /app/code/vendor/include/oracle/
-    services:
+      CGO_CFLAGS: -Isrc/github.com/18f/databases/aws-rds/include
+      LD_LIBRARY_PATH: "/home/vcap/app/include/oracle:$LD_LIBRARY_PATH"

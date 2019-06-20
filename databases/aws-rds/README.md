@@ -32,4 +32,6 @@ applications:
 
 ### Notes
 
-This tool vendors some Oracle binaries, which are licensed separately. You can find them under the `vendor/include/oracle` library, and the license at `vendor/include/oracle/BASIC_LICENSE`.
+This tool vendors some Oracle binaries, which are licensed separately. You can find them under the `include/oracle` library, and the license at `include/oracle/BASIC_LICENSE`.
+
+It's also important to note that `go mod -vendor` will not copy over C source and header files, so if you run `go mod -vendor`, you will lose those. If you do accidentally run it, never fear, just download and run this tool: https://github.com/nomad-software/vend.
