@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/cloudfoundry-community/go-cfenv"
 	"github.com/go-sql-driver/mysql"
@@ -26,12 +27,12 @@ func main() {
 	svcName := os.Getenv("SERVICE_NAME")
 	svc, err := svcs.WithName(svcName)
 
-	switch dbType {
-	case "postgres":
+	switch {
+	case strings.Contains("psql", dbType):
 		openAndTest("postgres", svc.Credentials["uri"].(string))
-	case "mysql":
+	case strings.Contains("mysql", dbType):
 		openAndTest("mysql", fmtMysql(svc))
-	case "oracle":
+	case strings.Contains("oracle", dbType):
 		openAndTest("goracle", svc.Credentials["uri"].(string))
 	}
 
