@@ -3,10 +3,7 @@ applications:
     buildpacks:
       - go_buildpack
     env:
-      DB_TYPE: oracle
-      ENABLE_FUNCTIONS:
       GOVERSION: go1.12
       GOPACKAGENAME: aws-rds
-      SERVICE_NAME:
       CGO_CFLAGS: -Isrc/github.com/18f/databases/aws-rds/include
       LD_LIBRARY_PATH: "/home/vcap/app/include/oracle:$LD_LIBRARY_PATH"

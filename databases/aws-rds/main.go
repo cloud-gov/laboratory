@@ -24,8 +24,19 @@ func main() {
 
 	svcs := appEnv.Services
 	dbType := os.Getenv("DB_TYPE")
+	if dbType == "" {
+		panic("DB_TYPE needs to be set")
+	}
+
 	svcName := os.Getenv("SERVICE_NAME")
+	if svcName == "" {
+		panic("SERVICE_NAME needs to be set")
+	}
+
 	svc, err := svcs.WithName(svcName)
+	if err != nil {
+		panic(err)
+	}
 
 	switch {
 	case strings.Contains("psql", dbType):

@@ -16,7 +16,7 @@ applications:
       ENABLE_FUNCTIONS: true | false
       GOVERSION: go1.12
       GOPACKAGENAME: aws-rds
-      SERVICE_NAME: # name of service instance to smoke test
+      SERVICE_NAME: aws-rds-service-instance # name of service instance to smoke test
       CGO_CFLAGS: -I /app/code/vendor/include/oracle/
     services:
       - # name of service instance to smoke test
