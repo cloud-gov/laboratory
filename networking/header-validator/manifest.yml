@@ -1,0 +1,16 @@
+---
+applications:
+  - name: header-validator
+    command: |
+      header-validator \
+        -expectation-ref header-files/cloud-gov-headers.json \
+        -intent-ref header-files/cloud-gov-intent.json
+    memory: 64M
+    disk_quota: 128M
+    routes:
+      - route: headers.app.cloud.gov
+    buildpacks:
+      - https://github.com/cloudfoundry/go-buildpack.git#v1.8.39
+    env:
+      GOVERSION: go1.12
+      GOPACKAGENAME: github.com/18f/header-validator

@@ -6,6 +6,7 @@ Labratory is a collection of tools, tests, and other accouterments that provide 
 | Tool | Purpose |
 | --- | --- |
 | databases/aws-rds | Used to run AWS RDS smoke tests for various databases. | 
+| networking/header-validator | Used to test headers through proxies. |
 
 ### Notes
 

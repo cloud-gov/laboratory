@@ -1,0 +1,5 @@
+/bazel-*
+/.idea/
+/.vs*
+/vendor/
+/header-validator
