@@ -1,0 +1,10 @@
+---
+applications:
+- name: test-java-rds-tls
+  random-route: true
+  memory: 768M
+  path: build/distributions/aws-rds-tls-boot.zip
+  buildpacks:
+    - java_buildpack
+  services:
+    - mysql-service
