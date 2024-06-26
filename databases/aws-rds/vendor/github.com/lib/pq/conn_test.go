@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -42,7 +43,7 @@ func testConninfo(conninfo string) string {
 	if forceBinaryParameters() &&
 		!strings.HasPrefix(conninfo, "postgres://") &&
 		!strings.HasPrefix(conninfo, "postgresql://") {
-		conninfo = conninfo + " binary_parameters=yes"
+		conninfo += " binary_parameters=yes"
 	}
 	return conninfo
 }
@@ -143,10 +144,6 @@ func TestOpenURL(t *testing.T) {
 const pgpassFile = "/tmp/pqgotest_pgpass"
 
 func TestPgpass(t *testing.T) {
-	if os.Getenv("TRAVIS") != "true" {
-		t.Skip("not running under Travis, skipping pgpass tests")
-	}
-
 	testAssert := func(conninfo string, expected string, reason string) {
 		conn, err := openTestConnConninfo(conninfo)
 		if err != nil {
@@ -703,8 +700,8 @@ func TestBadConn(t *testing.T) {
 	if err != driver.ErrBadConn {
 		t.Fatalf("expected driver.ErrBadConn, got: %#v", err)
 	}
-	if !cn.bad {
-		t.Fatalf("expected cn.bad")
+	if err := cn.err.get(); err != driver.ErrBadConn {
+		t.Fatalf("expected driver.ErrBadConn, got %#v", err)
 	}
 
 	cn = conn{}
@@ -716,15 +713,23 @@ func TestBadConn(t *testing.T) {
 	if err != driver.ErrBadConn {
 		t.Fatalf("expected driver.ErrBadConn, got: %#v", err)
 	}
-	if !cn.bad {
-		t.Fatalf("expected cn.bad")
+	if err := cn.err.get(); err != driver.ErrBadConn {
+		t.Fatalf("expected driver.ErrBadConn, got %#v", err)
 	}
 }
 
 // TestCloseBadConn tests that the underlying connection can be closed with
 // Close after an error.
 func TestCloseBadConn(t *testing.T) {
-	nc, err := net.Dial("tcp", "localhost:5432")
+	host := os.Getenv("PGHOST")
+	if host == "" {
+		host = "localhost"
+	}
+	port := os.Getenv("PGPORT")
+	if port == "" {
+		port = "5432"
+	}
+	nc, err := net.Dial("tcp", host+":"+port)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1554,6 +1559,38 @@ func TestQuoteIdentifier(t *testing.T) {
 	}
 }
 
+func TestQuoteLiteral(t *testing.T) {
+	var cases = []struct {
+		input string
+		want  string
+	}{
+		{`foo`, `'foo'`},
+		{`foo bar baz`, `'foo bar baz'`},
+		{`foo'bar`, `'foo''bar'`},
+		{`foo\bar`, ` E'foo\\bar'`},
+		{`foo\ba'r`, ` E'foo\\ba''r'`},
+		{`foo"bar`, `'foo"bar'`},
+		{`foo\x00bar`, ` E'foo\\x00bar'`},
+		{`\x00foo`, ` E'\\x00foo'`},
+		{`'`, `''''`},
+		{`''`, `''''''`},
+		{`\`, ` E'\\'`},
+		{`'abc'; DROP TABLE users;`, `'''abc''; DROP TABLE users;'`},
+		{`\'`, ` E'\\'''`},
+		{`E'\''`, ` E'E''\\'''''`},
+		{`e'\''`, ` E'e''\\'''''`},
+		{`E'\'abc\'; DROP TABLE users;'`, ` E'E''\\''abc\\''; DROP TABLE users;'''`},
+		{`e'\'abc\'; DROP TABLE users;'`, ` E'e''\\''abc\\''; DROP TABLE users;'''`},
+	}
+
+	for _, test := range cases {
+		got := QuoteLiteral(test.input)
+		if got != test.want {
+			t.Errorf("QuoteLiteral(%q) = %v want %v", test.input, got, test.want)
+		}
+	}
+}
+
 func TestRowsResultTag(t *testing.T) {
 	type ResultTag interface {
 		Result() driver.Result
@@ -1599,10 +1636,6 @@ func TestRowsResultTag(t *testing.T) {
 		},
 		{
 			query: "CREATE TEMP TABLE t (a int); DROP TABLE t; SELECT 1",
-		},
-		// Verify that an no-results query doesn't set the tag.
-		{
-			query: "CREATE TEMP TABLE t (a int); SELECT 1 WHERE FALSE; DROP TABLE t;",
 		},
 	}
 
@@ -1705,5 +1738,229 @@ func TestMultipleResult(t *testing.T) {
 	}
 	if buf[0].rowCount != 1 || buf[1].rowCount != 2 {
 		t.Fatal("incorrect number of rows returned")
+	}
+}
+
+func TestMultipleEmptyResult(t *testing.T) {
+	db := openTestConn(t)
+	defer db.Close()
+
+	rows, err := db.Query("select 1 where false; select 2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		t.Fatal("unexpected row")
+	}
+	if !rows.NextResultSet() {
+		t.Fatal("expected more result sets", rows.Err())
+	}
+	for rows.Next() {
+		var i int
+		if err := rows.Scan(&i); err != nil {
+			t.Fatal(err)
+		}
+		if i != 2 {
+			t.Fatalf("expected 2, got %d", i)
+		}
+	}
+	if rows.NextResultSet() {
+		t.Fatal("unexpected result set")
+	}
+}
+
+func TestCopyInStmtAffectedRows(t *testing.T) {
+	db := openTestConn(t)
+	defer db.Close()
+
+	_, err := db.Exec("CREATE TEMP TABLE temp (a int)")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	txn, err := db.BeginTx(context.TODO(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	copyStmt, err := txn.Prepare(CopyIn("temp", "a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := copyStmt.Exec()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res.RowsAffected()
+	res.LastInsertId()
+}
+
+func TestConnPrepareContext(t *testing.T) {
+	db := openTestConn(t)
+	defer db.Close()
+
+	tests := []struct {
+		name string
+		ctx  func() (context.Context, context.CancelFunc)
+		sql  string
+		err  error
+	}{
+		{
+			name: "context.Background",
+			ctx: func() (context.Context, context.CancelFunc) {
+				return context.Background(), nil
+			},
+			sql: "SELECT 1",
+			err: nil,
+		},
+		{
+			name: "context.WithTimeout exceeded",
+			ctx: func() (context.Context, context.CancelFunc) {
+				return context.WithTimeout(context.Background(), -time.Minute)
+			},
+			sql: "SELECT 1",
+			err: context.DeadlineExceeded,
+		},
+		{
+			name: "context.WithTimeout",
+			ctx: func() (context.Context, context.CancelFunc) {
+				return context.WithTimeout(context.Background(), time.Minute)
+			},
+			sql: "SELECT 1",
+			err: nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := tt.ctx()
+			if cancel != nil {
+				defer cancel()
+			}
+			_, err := db.PrepareContext(ctx, tt.sql)
+			switch {
+			case (err != nil) != (tt.err != nil):
+				t.Fatalf("conn.PrepareContext() unexpected nil err got = %v, expected = %v", err, tt.err)
+			case (err != nil && tt.err != nil) && (err.Error() != tt.err.Error()):
+				t.Errorf("conn.PrepareContext() got = %v, expected = %v", err.Error(), tt.err.Error())
+			}
+		})
+	}
+}
+
+func TestStmtQueryContext(t *testing.T) {
+	db := openTestConn(t)
+	defer db.Close()
+
+	tests := []struct {
+		name           string
+		ctx            func() (context.Context, context.CancelFunc)
+		sql            string
+		cancelExpected bool
+	}{
+		{
+			name: "context.Background",
+			ctx: func() (context.Context, context.CancelFunc) {
+				return context.Background(), nil
+			},
+			sql:            "SELECT pg_sleep(1);",
+			cancelExpected: false,
+		},
+		{
+			name: "context.WithTimeout exceeded",
+			ctx: func() (context.Context, context.CancelFunc) {
+				return context.WithTimeout(context.Background(), 1*time.Second)
+			},
+			sql:            "SELECT pg_sleep(10);",
+			cancelExpected: true,
+		},
+		{
+			name: "context.WithTimeout",
+			ctx: func() (context.Context, context.CancelFunc) {
+				return context.WithTimeout(context.Background(), time.Minute)
+			},
+			sql:            "SELECT pg_sleep(1);",
+			cancelExpected: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := tt.ctx()
+			if cancel != nil {
+				defer cancel()
+			}
+			stmt, err := db.PrepareContext(ctx, tt.sql)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = stmt.QueryContext(ctx)
+			pgErr := (*Error)(nil)
+			switch {
+			case (err != nil) != tt.cancelExpected:
+				t.Fatalf("stmt.QueryContext() unexpected nil err got = %v, cancelExpected = %v", err, tt.cancelExpected)
+			case (err != nil && tt.cancelExpected) && !(errors.As(err, &pgErr) && pgErr.Code == cancelErrorCode):
+				t.Errorf("stmt.QueryContext() got = %v, cancelExpected = %v", err.Error(), tt.cancelExpected)
+			}
+		})
+	}
+}
+
+func TestStmtExecContext(t *testing.T) {
+	db := openTestConn(t)
+	defer db.Close()
+
+	tests := []struct {
+		name           string
+		ctx            func() (context.Context, context.CancelFunc)
+		sql            string
+		cancelExpected bool
+	}{
+		{
+			name: "context.Background",
+			ctx: func() (context.Context, context.CancelFunc) {
+				return context.Background(), nil
+			},
+			sql:            "SELECT pg_sleep(1);",
+			cancelExpected: false,
+		},
+		{
+			name: "context.WithTimeout exceeded",
+			ctx: func() (context.Context, context.CancelFunc) {
+				return context.WithTimeout(context.Background(), 1*time.Second)
+			},
+			sql:            "SELECT pg_sleep(10);",
+			cancelExpected: true,
+		},
+		{
+			name: "context.WithTimeout",
+			ctx: func() (context.Context, context.CancelFunc) {
+				return context.WithTimeout(context.Background(), time.Minute)
+			},
+			sql:            "SELECT pg_sleep(1);",
+			cancelExpected: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := tt.ctx()
+			if cancel != nil {
+				defer cancel()
+			}
+			stmt, err := db.PrepareContext(ctx, tt.sql)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = stmt.ExecContext(ctx)
+			pgErr := (*Error)(nil)
+			switch {
+			case (err != nil) != tt.cancelExpected:
+				t.Fatalf("stmt.QueryContext() unexpected nil err got = %v, cancelExpected = %v", err, tt.cancelExpected)
+			case (err != nil && tt.cancelExpected) && !(errors.As(err, &pgErr) && pgErr.Code == cancelErrorCode):
+				t.Errorf("stmt.QueryContext() got = %v, cancelExpected = %v", err.Error(), tt.cancelExpected)
+			}
+		})
 	}
 }

@@ -1,17 +1,7 @@
 // Copyright 2019 Tamás Gulácsi
 //
 //
-//    Licensed under the Apache License, Version 2.0 (the "License");
-//    you may not use this file except in compliance with the License.
-//    You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-//    Unless required by applicable law or agreed to in writing, software
-//    distributed under the License is distributed on an "AS IS" BASIS,
-//    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-//    See the License for the specific language governing permissions and
-//    limitations under the License.
+// SPDX-License-Identifier: UPL-1.0 OR Apache-2.0
 
 package goracle_test
 
@@ -22,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pkg/errors"
+	errors "golang.org/x/xerrors"
 	goracle "gopkg.in/goracle.v2"
 )
 
@@ -37,9 +27,15 @@ BEGIN
   DBMS_LOB.createtemporary(tmp, TRUE, DBMS_LOB.SESSION);
   :1 := tmp;
 END;`
-	stmt, err := testDb.PrepareContext(ctx, qry)
+	tx, err := testDb.BeginTx(ctx, nil)
 	if err != nil {
-		t.Fatal(errors.WithMessage(err, qry))
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.PrepareContext(ctx, qry)
+	if err != nil {
+		t.Fatal(errors.Errorf("%s: %w", qry, err))
 	}
 	defer stmt.Close()
 	var tmp goracle.Lob
@@ -49,7 +45,7 @@ END;`
 	t.Logf("tmp: %#v", tmp)
 
 	want := [...]byte{1, 2, 3, 4, 5}
-	if _, err := testDb.ExecContext(ctx,
+	if _, err := tx.ExecContext(ctx,
 		"BEGIN dbms_lob.append(:1, :2); END;",
 		tmp, goracle.Lob{Reader: bytes.NewReader(want[:])},
 	); err != nil {
@@ -58,7 +54,7 @@ END;`
 
 	if true {
 		// Either use DBMS_LOB.freetemporary
-		if _, err := testDb.ExecContext(ctx, "BEGIN dbms_lob.freetemporary(:1); END;", tmp); err != nil {
+		if _, err := tx.ExecContext(ctx, "BEGIN dbms_lob.freetemporary(:1); END;", tmp); err != nil {
 			t.Errorf("Failed to close temporary lob(%v): %+v", tmp, err)
 		}
 	} else {
@@ -91,7 +87,8 @@ func TestStatWithLobs(t *testing.T) {
 	}
 	defer ms.Close()
 	if _, err = ms.Fetch(ctx); err != nil {
-		if c, ok := errors.Cause(err).(interface{ Code() int }); ok && c.Code() == 942 {
+		var c interface{ Code() int }
+		if errors.As(err, &c); c.Code() == 942 {
 			t.Skip(err)
 			return
 		}

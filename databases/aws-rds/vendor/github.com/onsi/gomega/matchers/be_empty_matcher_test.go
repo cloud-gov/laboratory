@@ -1,13 +1,13 @@
 package matchers_test
 
 import (
-	. "github.com/onsi/ginkgo"
+	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	. "github.com/onsi/gomega/matchers"
 )
 
 var _ = Describe("BeEmpty", func() {
-	Context("when passed a supported type", func() {
+	When("passed a supported type", func() {
 		It("should do the right thing", func() {
 			Expect("").Should(BeEmpty())
 			Expect(" ").ShouldNot(BeEmpty())
@@ -28,7 +28,7 @@ var _ = Describe("BeEmpty", func() {
 		})
 	})
 
-	Context("when passed a correctly typed nil", func() {
+	When("passed a correctly typed nil", func() {
 		It("should be true", func() {
 			var nilSlice []int
 			Expect(nilSlice).Should(BeEmpty())
@@ -38,7 +38,7 @@ var _ = Describe("BeEmpty", func() {
 		})
 	})
 
-	Context("when passed an unsupported type", func() {
+	When("passed an unsupported type", func() {
 		It("should error", func() {
 			success, err := (&BeEmptyMatcher{}).Match(0)
 			Expect(success).Should(BeFalse())

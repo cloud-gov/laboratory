@@ -6,7 +6,7 @@ import (
 
 	. "github.com/onsi/gomega/gexec"
 
-	. "github.com/onsi/ginkgo"
+	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
 
@@ -21,7 +21,9 @@ var _ = Describe("ExitMatcher", func() {
 	var session *Session
 
 	BeforeEach(func() {
-		var err error
+		fireflyPath, err := Build("./_fixture/firefly")
+		Expect(err).ShouldNot(HaveOccurred())
+
 		command = exec.Command(fireflyPath, "0")
 		session, err = Start(command, nil, nil)
 		Expect(err).ShouldNot(HaveOccurred())

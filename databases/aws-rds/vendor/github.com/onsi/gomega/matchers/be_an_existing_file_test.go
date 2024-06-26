@@ -1,32 +1,32 @@
 package matchers_test
 
 import (
-	"io/ioutil"
 	"os"
 
-	. "github.com/onsi/ginkgo"
+	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/onsi/gomega/internal/gutil"
 	. "github.com/onsi/gomega/matchers"
 )
 
 var _ = Describe("BeAnExistingFileMatcher", func() {
-	Context("when passed a string", func() {
+	When("passed a string", func() {
 		It("should do the right thing", func() {
 			Expect("/dne/test").ShouldNot(BeAnExistingFile())
 
-			tmpFile, err := ioutil.TempFile("", "gomega-test-tempfile")
+			tmpFile, err := os.CreateTemp("", "gomega-test-tempfile")
 			Expect(err).ShouldNot(HaveOccurred())
 			defer os.Remove(tmpFile.Name())
 			Expect(tmpFile.Name()).Should(BeAnExistingFile())
 
-			tmpDir, err := ioutil.TempDir("", "gomega-test-tempdir")
+			tmpDir, err := gutil.MkdirTemp("", "gomega-test-tempdir")
 			Expect(err).ShouldNot(HaveOccurred())
 			defer os.Remove(tmpDir)
 			Expect(tmpDir).Should(BeAnExistingFile())
 		})
 	})
 
-	Context("when passed something else", func() {
+	When("passed something else", func() {
 		It("should error", func() {
 			success, err := (&BeAnExistingFileMatcher{}).Match(nil)
 			Expect(success).Should(BeFalse())

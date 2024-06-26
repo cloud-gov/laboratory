@@ -1,25 +1,16 @@
 // Copyright 2018 Kurt K, Tamás Gulácsi.
 //
 //
-//    Licensed under the Apache License, Version 2.0 (the "License");
-//    you may not use this file except in compliance with the License.
-//    You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-//    Unless required by applicable law or agreed to in writing, software
-//    distributed under the License is distributed on an "AS IS" BASIS,
-//    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-//    See the License for the specific language governing permissions and
-//    limitations under the License.
+// SPDX-License-Identifier: UPL-1.0 OR Apache-2.0
 
 package goracle_test
 
 import (
+	"context"
 	"database/sql"
 	"log"
 
-	"github.com/pkg/errors"
+	errors "golang.org/x/xerrors"
 
 	goracle "gopkg.in/goracle.v2"
 )
@@ -31,14 +22,16 @@ func ExampleStartup() {
 	}
 }
 func exampleStartup(startupMode goracle.StartupMode) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	dsn := "oracle://?sysdba=1&prelim=1"
 	db, err := sql.Open("goracle", dsn)
 	if err != nil {
-		log.Fatal(errors.Wrap(err, dsn))
+		log.Fatal(errors.Errorf("%s: %w", dsn, err))
 	}
 	defer db.Close()
 
-	oraDB, err := goracle.DriverConn(db)
+	oraDB, err := goracle.DriverConn(ctx, db)
 	if err != nil {
 		return err
 	}
@@ -70,7 +63,7 @@ func ExampleShutdown() {
 	dsn := "oracle://?sysdba=1" // equivalent to "/ as sysdba"
 	db, err := sql.Open("goracle", dsn)
 	if err != nil {
-		log.Fatal(errors.Wrap(err, dsn))
+		log.Fatal(errors.Errorf("%s: %w", dsn, err))
 	}
 	defer db.Close()
 
@@ -80,7 +73,9 @@ func ExampleShutdown() {
 }
 
 func exampleShutdown(db *sql.DB, shutdownMode goracle.ShutdownMode) error {
-	oraDB, err := goracle.DriverConn(db)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	oraDB, err := goracle.DriverConn(ctx, db)
 	if err != nil {
 		return err
 	}

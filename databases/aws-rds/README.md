@@ -26,7 +26,7 @@ applications:
 1. `cf create-service ...`
 1. `cf bind-service aws-rds-smoke-test <si>`
 1. `while [ $? -ne 0 ]; do !!; done` <- keeps trying to bind until the DB is provisioned, then exits
-1. `cf aws-rds-smoke-test set-env DB_TYPE "postgresl"`
+1. `cf set-env aws-rds-smoke-test DB_TYPE "postgresl"`
 1. `cf start aws-rds-smoke-test`
 1. If the app starts successfully, your brokered database service was able to be written to.
 

@@ -1,13 +1,13 @@
 package matchers_test
 
 import (
-	. "github.com/onsi/ginkgo"
+	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	. "github.com/onsi/gomega/matchers"
 )
 
 var _ = Describe("BeNumerically", func() {
-	Context("when passed a number", func() {
+	When("passed a number", func() {
 		It("should support ==", func() {
 			Expect(uint32(5)).Should(BeNumerically("==", 5))
 			Expect(float64(5.0)).Should(BeNumerically("==", 5))
@@ -67,8 +67,8 @@ var _ = Describe("BeNumerically", func() {
 			Expect(int8(5)).Should(BeNumerically("<=", 5))
 		})
 
-		Context("when passed ~", func() {
-			Context("when passed a float", func() {
+		When("passed ~", func() {
+			When("passed a float", func() {
 				Context("and there is no precision parameter", func() {
 					It("should default to 1e-8", func() {
 						Expect(5.00000001).Should(BeNumerically("~", 5.00000002))
@@ -110,7 +110,7 @@ var _ = Describe("BeNumerically", func() {
 				})
 			})
 
-			Context("when passed an int/uint", func() {
+			When("passed an int/uint", func() {
 				Context("and there is no precision parameter", func() {
 					It("should just do strict equality", func() {
 						Expect(5).Should(BeNumerically("~", 5))
@@ -130,7 +130,7 @@ var _ = Describe("BeNumerically", func() {
 		})
 	})
 
-	Context("when passed a non-number", func() {
+	When("passed a non-number", func() {
 		It("should error", func() {
 			success, err := (&BeNumericallyMatcher{Comparator: "==", CompareTo: []interface{}{5}}).Match("foo")
 			Expect(success).Should(BeFalse())
@@ -143,6 +143,7 @@ var _ = Describe("BeNumerically", func() {
 			success, err = (&BeNumericallyMatcher{Comparator: "~", CompareTo: []interface{}{3.0, "foo"}}).Match(5.0)
 			Expect(success).Should(BeFalse())
 			Expect(err).Should(HaveOccurred())
+			Expect(err.Error()).Should(ContainSubstring("foo"))
 
 			success, err = (&BeNumericallyMatcher{Comparator: "==", CompareTo: []interface{}{"bar"}}).Match(5)
 			Expect(success).Should(BeFalse())
@@ -162,7 +163,7 @@ var _ = Describe("BeNumerically", func() {
 		})
 	})
 
-	Context("when passed an unsupported comparator", func() {
+	When("passed an unsupported comparator", func() {
 		It("should error", func() {
 			success, err := (&BeNumericallyMatcher{Comparator: "!=", CompareTo: []interface{}{5}}).Match(4)
 			Expect(success).Should(BeFalse())

@@ -1,3 +1,4 @@
+//go:build go1.9
 // +build go1.9
 
 package pq
@@ -55,6 +56,13 @@ func TestPing(t *testing.T) {
 	if rows.Err() != nil {
 		t.Fatal(err)
 	}
+	// Fail the transaction and make sure we can still ping.
+	if _, err := tx.Query("INVALID SQL"); err == nil {
+		t.Fatal("expected error")
+	}
+	if err := conn.PingContext(ctx); err != nil {
+		t.Fatal(err)
+	}
 	if err := tx.Rollback(); err != nil {
 		t.Fatal(err)
 	}
@@ -65,5 +73,27 @@ func TestPing(t *testing.T) {
 	}
 	if err := conn.PingContext(ctx); err != driver.ErrBadConn {
 		t.Fatalf("expected error %s, instead got %s", driver.ErrBadConn, err)
+	}
+}
+
+func TestCommitInFailedTransactionWithCancelContext(t *testing.T) {
+	db := openTestConn(t)
+	defer db.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	txn, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := txn.Query("SELECT error")
+	if err == nil {
+		rows.Close()
+		t.Fatal("expected failure")
+	}
+	err = txn.Commit()
+	if err != ErrInFailedTransaction {
+		t.Fatalf("expected ErrInFailedTransaction; got %#v", err)
 	}
 }

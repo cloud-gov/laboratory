@@ -3,6 +3,7 @@ package mapstructure
 import (
 	"reflect"
 	"testing"
+	"time"
 )
 
 // GH-1, GH-10, GH-96
@@ -456,5 +457,171 @@ func TestDecode_DecodeHookInterface(t *testing.T) {
 		if !reflect.DeepEqual(decodeInto.Test, expected) {
 			t.Fatalf("expected: %#v (%T), got: %#v (%T)", decodeInto.Test, decodeInto.Test, expected, expected)
 		}
+	}
+}
+
+// #103 Check for data type before trying to access its composants prevent a panic error
+// in decodeSlice
+func TestDecodeBadDataTypeInSlice(t *testing.T) {
+	t.Parallel()
+
+	input := map[string]interface{}{
+		"Toto": "titi",
+	}
+	result := []struct {
+		Toto string
+	}{}
+
+	if err := Decode(input, &result); err == nil {
+		t.Error("An error was expected, got nil")
+	}
+}
+
+// #202 Ensure that intermediate maps in the struct -> struct decode process are settable
+// and not just the elements within them.
+func TestDecodeIntermediateMapsSettable(t *testing.T) {
+	type Timestamp struct {
+		Seconds int64
+		Nanos   int32
+	}
+
+	type TsWrapper struct {
+		Timestamp *Timestamp
+	}
+
+	type TimeWrapper struct {
+		Timestamp time.Time
+	}
+
+	input := TimeWrapper{
+		Timestamp: time.Unix(123456789, 987654),
+	}
+
+	expected := TsWrapper{
+		Timestamp: &Timestamp{
+			Seconds: 123456789,
+			Nanos:   987654,
+		},
+	}
+
+	timePtrType := reflect.TypeOf((*time.Time)(nil))
+	mapStrInfType := reflect.TypeOf((map[string]interface{})(nil))
+
+	var actual TsWrapper
+	decoder, err := NewDecoder(&DecoderConfig{
+		Result: &actual,
+		DecodeHook: func(from, to reflect.Type, data interface{}) (interface{}, error) {
+			if from == timePtrType && to == mapStrInfType {
+				ts := data.(*time.Time)
+				nanos := ts.UnixNano()
+
+				seconds := nanos / 1000000000
+				nanos = nanos % 1000000000
+
+				return &map[string]interface{}{
+					"Seconds": seconds,
+					"Nanos":   int32(nanos),
+				}, nil
+			}
+			return data, nil
+		},
+	})
+
+	if err != nil {
+		t.Fatalf("failed to create decoder: %v", err)
+	}
+
+	if err := decoder.Decode(&input); err != nil {
+		t.Fatalf("failed to decode input: %v", err)
+	}
+
+	if !reflect.DeepEqual(expected, actual) {
+		t.Fatalf("expected: %#[1]v (%[1]T), got: %#[2]v (%[2]T)", expected, actual)
+	}
+}
+
+// GH-206: decodeInt throws an error for an empty string
+func TestDecode_weakEmptyStringToInt(t *testing.T) {
+	input := map[string]interface{}{
+		"StringToInt":   "",
+		"StringToUint":  "",
+		"StringToBool":  "",
+		"StringToFloat": "",
+	}
+
+	expectedResultWeak := TypeConversionResult{
+		StringToInt:   0,
+		StringToUint:  0,
+		StringToBool:  false,
+		StringToFloat: 0,
+	}
+
+	// Test weak type conversion
+	var resultWeak TypeConversionResult
+	err := WeakDecode(input, &resultWeak)
+	if err != nil {
+		t.Fatalf("got an err: %s", err)
+	}
+
+	if !reflect.DeepEqual(resultWeak, expectedResultWeak) {
+		t.Errorf("expected \n%#v, got: \n%#v", expectedResultWeak, resultWeak)
+	}
+}
+
+// GH-228: Squash cause *time.Time set to zero
+func TestMapSquash(t *testing.T) {
+	type AA struct {
+		T *time.Time
+	}
+	type A struct {
+		AA
+	}
+
+	v := time.Now()
+	in := &AA{
+		T: &v,
+	}
+	out := &A{}
+	d, err := NewDecoder(&DecoderConfig{
+		Squash: true,
+		Result: out,
+	})
+	if err != nil {
+		t.Fatalf("err: %s", err)
+	}
+	if err := d.Decode(in); err != nil {
+		t.Fatalf("err: %s", err)
+	}
+
+	// these failed
+	if !v.Equal(*out.T) {
+		t.Fatal("expected equal")
+	}
+	if out.T.IsZero() {
+		t.Fatal("expected false")
+	}
+}
+
+// GH-238: Empty key name when decoding map from struct with only omitempty flag
+func TestMapOmitEmptyWithEmptyFieldnameInTag(t *testing.T) {
+	type Struct struct {
+		Username string `mapstructure:",omitempty"`
+		Age      int    `mapstructure:",omitempty"`
+	}
+
+	s := Struct{
+		Username: "Joe",
+	}
+	var m map[string]interface{}
+
+	if err := Decode(s, &m); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(m) != 1 {
+		t.Fatalf("fail: %#v", m)
+	}
+	if m["Username"] != "Joe" {
+		t.Fatalf("fail: %#v", m)
 	}
 }

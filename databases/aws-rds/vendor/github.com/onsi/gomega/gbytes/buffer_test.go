@@ -8,7 +8,7 @@ import (
 
 	"bytes"
 
-	. "github.com/onsi/ginkgo"
+	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
 
@@ -105,23 +105,10 @@ var _ = Describe("Buffer", func() {
 			Expect(err).Should(Equal(io.EOF))
 			Expect(n).Should(Equal(0))
 		})
-
-		Context("after the buffer has been closed", func() {
-			It("returns an error", func() {
-				buffer := BufferWithBytes([]byte("abcde"))
-
-				buffer.Close()
-
-				dest := make([]byte, 3)
-				n, err := buffer.Read(dest)
-				Expect(err).Should(HaveOccurred())
-				Expect(n).Should(Equal(0))
-			})
-		})
 	})
 
 	Describe("detecting regular expressions", func() {
-		It("should fire the appropriate channel when the passed in pattern matches, then close it", func(done Done) {
+		It("should fire the appropriate channel when the passed in pattern matches, then close it", func() {
 			go func() {
 				time.Sleep(10 * time.Millisecond)
 				buffer.Write([]byte("abcde"))
@@ -135,6 +122,8 @@ var _ = Describe("Buffer", func() {
 			case gotIt = <-A:
 			case <-B:
 				Fail("should not have gotten here")
+			case <-time.After(time.Second):
+				Fail("timed out waiting for detection")
 			}
 
 			Expect(gotIt).Should(BeTrue())
@@ -143,31 +132,35 @@ var _ = Describe("Buffer", func() {
 			buffer.Write([]byte("f"))
 			Eventually(B).Should(Receive())
 			Eventually(B).Should(BeClosed())
-
-			close(done)
 		})
 
-		It("should fast-forward the buffer upon detection", func(done Done) {
+		It("should fast-forward the buffer upon detection", func() {
 			buffer.Write([]byte("abcde"))
-			<-buffer.Detect("abc")
+			select {
+			case <-buffer.Detect("abc"):
+			case <-time.After(time.Second):
+				Fail("timed out waiting for detection")
+			}
 			Expect(buffer).ShouldNot(Say("abc"))
 			Expect(buffer).Should(Say("de"))
-			close(done)
 		})
 
-		It("should only fast-forward the buffer when the channel is read, and only if doing so would not rewind it", func(done Done) {
+		It("should only fast-forward the buffer when the channel is read, and only if doing so would not rewind it", func() {
 			buffer.Write([]byte("abcde"))
 			A := buffer.Detect("abc")
 			time.Sleep(20 * time.Millisecond) //give the goroutine a chance to detect and write to the channel
 			Expect(buffer).Should(Say("abcd"))
-			<-A
+			select {
+			case <-A:
+			case <-time.After(time.Second):
+				Fail("timed out waiting for detection")
+			}
 			Expect(buffer).ShouldNot(Say("d"))
 			Expect(buffer).Should(Say("e"))
 			Eventually(A).Should(BeClosed())
-			close(done)
 		})
 
-		It("should be possible to cancel a detection", func(done Done) {
+		It("should be possible to cancel a detection", func() {
 			A := buffer.Detect("abc")
 			B := buffer.Detect("def")
 			buffer.CancelDetects()
@@ -176,8 +169,31 @@ var _ = Describe("Buffer", func() {
 			Eventually(B).Should(BeClosed())
 
 			Expect(buffer).Should(Say("bcde"))
-			<-buffer.Detect("f")
-			close(done)
+			select {
+			case <-buffer.Detect("f"):
+			case <-time.After(time.Second):
+				Fail("timed out waiting for detection")
+			}
+		})
+	})
+
+	Describe("clearing the buffer", func() {
+		It("should clear out the contents of the buffer", func() {
+			buffer.Write([]byte("abc"))
+			Expect(buffer).To(Say("ab"))
+			Expect(buffer.Clear()).To(Succeed())
+			Expect(buffer).NotTo(Say("c"))
+			Expect(buffer.Contents()).To(BeEmpty())
+			buffer.Write([]byte("123"))
+			Expect(buffer).To(Say("123"))
+			Expect(buffer.Contents()).To(Equal([]byte("123")))
+		})
+
+		It("should error when the buffer is closed", func() {
+			buffer.Write([]byte("abc"))
+			buffer.Close()
+			err := buffer.Clear()
+			Expect(err).To(HaveOccurred())
 		})
 	})
 

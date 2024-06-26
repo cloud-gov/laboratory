@@ -1,58 +1,31 @@
+# filippo.io/edwards25519 v1.1.0
+## explicit; go 1.20
+filippo.io/edwards25519
+filippo.io/edwards25519/field
 # github.com/cloudfoundry-community/go-cfenv v1.18.0
+## explicit; go 1.11
 github.com/cloudfoundry-community/go-cfenv
-# github.com/fsnotify/fsnotify v1.4.7
-github.com/fsnotify/fsnotify
-# github.com/go-kit/kit v0.8.0
-github.com/go-kit/kit
-# github.com/go-logfmt/logfmt v0.4.0
-github.com/go-logfmt/logfmt
-# github.com/go-sql-driver/mysql v1.4.1
+# github.com/go-sql-driver/mysql v1.8.1
+## explicit; go 1.18
 github.com/go-sql-driver/mysql
-# github.com/go-stack/stack v1.8.0
-github.com/go-stack/stack
-# github.com/golang/protobuf v1.3.1
-github.com/golang/protobuf
-# github.com/google/go-cmp v0.2.0
-github.com/google/go-cmp
-# github.com/hpcloud/tail v1.0.0
-github.com/hpcloud/tail
-# github.com/joefitzgerald/rainbow-reporter v0.1.0
-github.com/joefitzgerald/rainbow-reporter
-# github.com/kr/logfmt v0.0.0-20140226030751-b84e30acd515
-github.com/kr/logfmt
-# github.com/lib/pq v1.1.1
+# github.com/google/go-cmp v0.6.0
+## explicit; go 1.13
+# github.com/lib/pq v1.10.9
+## explicit; go 1.13
 github.com/lib/pq
-# github.com/mitchellh/mapstructure v1.1.2
+github.com/lib/pq/oid
+github.com/lib/pq/scram
+# github.com/mitchellh/mapstructure v1.5.0
+## explicit; go 1.14
 github.com/mitchellh/mapstructure
-# github.com/onsi/ginkgo v1.8.0
-github.com/onsi/ginkgo
-# github.com/onsi/gomega v1.5.0
-github.com/onsi/gomega
-# github.com/pkg/errors v0.8.1
-github.com/pkg/errors
-# github.com/sclevine/spec v1.2.0
-github.com/sclevine/spec
-# golang.org/x/crypto v0.0.0-20190605123033-f99c8df09eb5
-golang.org/x/crypto
-# golang.org/x/net v0.0.0-20190603091049-60506f45cf65
-golang.org/x/net
-# golang.org/x/sync v0.0.0-20190423024810-112230192c58
-golang.org/x/sync
-# golang.org/x/sys v0.0.0-20190606165138-5da285871e9c
-golang.org/x/sys
-# golang.org/x/text v0.3.2
-golang.org/x/text
-# golang.org/x/tools v0.0.0-20190606124116-d0a3d012864b
-golang.org/x/tools
-# google.golang.org/appengine v1.6.1
-google.golang.org/appengine
-# gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405
-gopkg.in/check.v1
-# gopkg.in/fsnotify.v1 v1.4.7
-gopkg.in/fsnotify.v1
-# gopkg.in/goracle.v2 v2.16.3
+# github.com/onsi/gomega v1.33.1
+## explicit; go 1.20
+# github.com/sclevine/spec v1.4.0
+## explicit; go 1.13
+# golang.org/x/xerrors v0.0.0-20231012003039-104605ab7028
+## explicit; go 1.18
+golang.org/x/xerrors
+golang.org/x/xerrors/internal
+# gopkg.in/goracle.v2 v2.24.1
+## explicit; go 1.13
 gopkg.in/goracle.v2
-# gopkg.in/tomb.v1 v1.0.0-20141024135613-dd632973f1e7
-gopkg.in/tomb.v1
-# gopkg.in/yaml.v2 v2.2.1
-gopkg.in/yaml.v2

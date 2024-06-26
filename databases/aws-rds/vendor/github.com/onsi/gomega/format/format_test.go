@@ -1,17 +1,27 @@
 package format_test
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
 
-	. "github.com/onsi/ginkgo"
+	. "github.com/onsi/ginkgo/v2"
+
 	. "github.com/onsi/gomega"
 	. "github.com/onsi/gomega/format"
 	"github.com/onsi/gomega/types"
 )
 
 //recursive struct
+
+const truncateHelpText = `
+Gomega truncated this representation as it exceeds 'format.MaxLength'.
+Consider having the object provide a custom 'GomegaStringer' representation
+or adjust the parameters in Gomega's 'format' package.
+
+Learn more here: https://onsi.github.io/gomega/#adjusting-output
+`
 
 type StringAlias string
 type ByteAlias []byte
@@ -55,6 +65,33 @@ type SecretiveStruct struct {
 	interfaceValue interface{}
 }
 
+type CustomFormatted struct {
+	Data  string
+	Count int
+}
+type NotCustomFormatted struct {
+	Data  string
+	Count int
+}
+
+type CustomError struct {
+	Details string
+}
+
+var _ error = &CustomError{}
+
+func (c *CustomError) Error() string {
+	return c.Details
+}
+
+func customFormatter(obj interface{}) (string, bool) {
+	cf, ok := obj.(CustomFormatted)
+	if !ok {
+		return "", false
+	}
+	return fmt.Sprintf("%s (%d)", cf.Data, cf.Count), true
+}
+
 type GoStringer struct {
 }
 
@@ -73,23 +110,25 @@ func (g Stringer) String() string {
 	return "string"
 }
 
-type ctx struct {
+type gomegaStringer struct {
 }
 
-func (c *ctx) Deadline() (deadline time.Time, ok bool) {
-	return time.Time{}, false
+func (g gomegaStringer) GomegaString() string {
+	return "gomegastring"
 }
 
-func (c *ctx) Done() <-chan struct{} {
-	return nil
+type gomegaStringerLong struct {
 }
 
-func (c *ctx) Err() error {
-	return nil
+func (g gomegaStringerLong) GomegaString() string {
+	return strings.Repeat("s", MaxLength*2)
 }
 
-func (c *ctx) Value(key interface{}) interface{} {
-	return nil
+type gomegaStringerMultiline struct {
+}
+
+func (g gomegaStringerMultiline) GomegaString() string {
+	return "A\nB\nC"
 }
 
 var _ = Describe("Format", func() {
@@ -113,13 +152,29 @@ var _ = Describe("Format", func() {
 		for i := range arr {
 			arr[i] = entriesSwitch
 		}
-		return "{" + strings.Join(arr, ", ") + "}"
+		return "{\\s*" + strings.Join(arr, ",\\s* ") + ",?\\s*}"
 	}
 
 	Describe("Message", func() {
 		Context("with only an actual value", func() {
+			BeforeEach(func() {
+				MaxLength = 4000
+			})
+
 			It("should print out an indented formatted representation of the value and the message", func() {
 				Expect(Message(3, "to be three.")).Should(Equal("Expected\n    <int>: 3\nto be three."))
+			})
+
+			It("should print out an indented formatted representation of the value and the message, and trucate it when too long", func() {
+				tooLong := strings.Repeat("s", MaxLength+1)
+				tooLongResult := strings.Repeat("s", MaxLength) + "...\n" + truncateHelpText
+				Expect(Message(tooLong, "to be truncated")).Should(Equal("Expected\n    <string>: " + tooLongResult + "\nto be truncated"))
+			})
+
+			It("should print out an indented formatted representation of the value and the message, and not trucate it when MaxLength = 0", func() {
+				MaxLength = 0
+				tooLong := strings.Repeat("s", MaxLength+1)
+				Expect(Message(tooLong, "to be truncated")).Should(Equal("Expected\n    <string>: " + tooLong + "\nto be truncated"))
 			})
 		})
 
@@ -167,6 +222,21 @@ var _ = Describe("Format", func() {
 			Expect(MessageWithDiff(stringA, "to equal", stringB)).Should(Equal(expectedTruncatedMultiByteFailureMessage))
 		})
 
+		It("prints special characters", func() {
+			stringA := "\n"
+			stringB := "something_else"
+
+			Expect(MessageWithDiff(stringA, "to equal", stringB)).Should(Equal(expectedSpecialCharacterFailureMessage))
+		})
+
+		It("handles negative padding length", func() {
+			stringWithB := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+			stringWithZ := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaazaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+			longMessage := "to equal very long message"
+
+			Expect(MessageWithDiff(stringWithB, longMessage, stringWithZ)).Should(Equal(expectedDiffLongMessage))
+		})
+
 		Context("With truncated diff disabled", func() {
 			BeforeEach(func() {
 				TruncatedDiff = false
@@ -181,6 +251,99 @@ var _ = Describe("Format", func() {
 				stringWithZ := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaazaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 				Expect(MessageWithDiff(stringWithB, "to equal", stringWithZ)).Should(Equal(expectedFullFailureDiff))
+			})
+		})
+
+		Context("With alternate diff lengths", func() {
+			initialValue := TruncateThreshold // 50 by default
+			BeforeEach(func() {
+				TruncateThreshold = 10000
+			})
+
+			AfterEach(func() {
+				TruncateThreshold = initialValue
+			})
+
+			It("should show the full diff when truncate threshold is increased beyond length of strings", func() {
+				stringWithB := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+				stringWithZ := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaazaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+				Expect(MessageWithDiff(stringWithB, "to equal", stringWithZ)).Should(Equal(expectedFullFailureDiff))
+			})
+		})
+
+		Context("with alternative number of characters to include around mismatch", func() {
+			initialValue := CharactersAroundMismatchToInclude // 5 by default
+			BeforeEach(func() {
+				CharactersAroundMismatchToInclude = 10
+			})
+
+			AfterEach(func() {
+				CharactersAroundMismatchToInclude = initialValue
+			})
+
+			It("it shows more characters around a line length mismatch", func() {
+				smallString := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+				largeString := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+				Expect(MessageWithDiff(largeString, "to equal", smallString)).Should(Equal(expectedTruncatedStartSizeFailureMessageExtraDiff))
+				Expect(MessageWithDiff(smallString, "to equal", largeString)).Should(Equal(expectedTruncatedStartSizeSwappedFailureMessageExtraDiff))
+			})
+		})
+
+		Describe("At extremes of configurable values", func() {
+			Context("with zero-length threshold", func() {
+				initialValue := TruncateThreshold // 50 by default
+				BeforeEach(func() {
+					TruncateThreshold = 0
+				})
+
+				AfterEach(func() {
+					TruncateThreshold = initialValue
+				})
+
+				It("should show the full diff when truncate threshold is increased beyond length of strings", func() {
+					stringWithB := "aba"
+					stringWithZ := "aza"
+					Expect(MessageWithDiff(stringWithB, "to equal", stringWithZ)).Should(Equal(expectedDiffSmallThreshold))
+				})
+			})
+
+			Context("with zero characters around mismatch", func() {
+				initialValue := CharactersAroundMismatchToInclude // 5 by default
+				BeforeEach(func() {
+					CharactersAroundMismatchToInclude = 0
+				})
+
+				AfterEach(func() {
+					CharactersAroundMismatchToInclude = initialValue
+				})
+
+				It("", func() {
+					stringWithB := "aba"
+					stringWithZ := "aza"
+					Expect(MessageWithDiff(stringWithB, "to equal", stringWithZ)).Should(Equal(expectedDiffZeroMismatch))
+				})
+			})
+
+			Context("with zero-length threshold and zero characters around mismatch", func() {
+				initialCharactersAroundMismatch := CharactersAroundMismatchToInclude
+				initialTruncateThreshold := TruncateThreshold
+				BeforeEach(func() {
+					CharactersAroundMismatchToInclude = 0
+					TruncateThreshold = 0
+				})
+
+				AfterEach(func() {
+					CharactersAroundMismatchToInclude = initialCharactersAroundMismatch
+					TruncateThreshold = initialTruncateThreshold
+				})
+
+				It("", func() {
+					stringWithB := "aba"
+					stringWithZ := "aza"
+					Expect(MessageWithDiff(stringWithB, "to equal", stringWithZ)).Should(Equal(expectedDiffSmallThresholdZeroMismatch))
+				})
 			})
 		})
 	})
@@ -238,13 +401,13 @@ var _ = Describe("Format", func() {
 		})
 
 		Describe("formatting []byte slices", func() {
-			Context("when the slice is made of printable bytes", func() {
+			When("the slice is made of printable bytes", func() {
 				It("should present it as string", func() {
 					b := []byte("a b c")
 					Expect(Object(b, 1)).Should(matchRegexp(`\[\]uint8 \| len:5, cap:\d+`, `a b c`))
 				})
 			})
-			Context("when the slice contains non-printable bytes", func() {
+			When("the slice contains non-printable bytes", func() {
 				It("should present it as slice", func() {
 					b := []byte("a b c\n\x01\x02\x03\xff\x1bH")
 					Expect(Object(b, 1)).Should(matchRegexp(`\[\]uint8 \| len:12, cap:\d+`, `\[97, 32, 98, 32, 99, 10, 1, 2, 3, 255, 27, 72\]`))
@@ -267,7 +430,7 @@ var _ = Describe("Format", func() {
 				Expect(Object(&a, 1)).Should(match(fmt.Sprintf("*int | %p", &a), "3"))
 			})
 
-			Context("when there are pointers to pointers...", func() {
+			When("there are pointers to pointers...", func() {
 				It("should recursively deference the pointer until it gets to a value", func() {
 					a := 3
 					var b *int
@@ -281,7 +444,7 @@ var _ = Describe("Format", func() {
 				})
 			})
 
-			Context("when the pointer points to nil", func() {
+			When("the pointer points to nil", func() {
 				It("should say nil and not explode", func() {
 					var a *AStruct
 					Expect(Object(a, 1)).Should(match("*format_test.AStruct | 0x0", "nil"))
@@ -309,7 +472,7 @@ var _ = Describe("Format", func() {
 				Expect(Object(s, 1)).Should(match("[]bool | len:3, cap:4", "[false, false, false]"))
 			})
 
-			Context("when the slice contains long entries", func() {
+			When("the slice contains long entries", func() {
 				It("should format the entries with newlines", func() {
 					w := []string{"Josiah Edward Bartlet", "Toby Ziegler", "CJ Cregg"}
 					expected := `[
@@ -330,7 +493,7 @@ var _ = Describe("Format", func() {
 				Expect(Object(m, 1)).Should(matchRegexp(`map\[int\]bool \| len:2`, hashMatchingRegexp("3: true", "4: false")))
 			})
 
-			Context("when the slice contains long entries", func() {
+			When("the slice contains long entries", func() {
 				It("should format the entries with newlines", func() {
 					m := map[string][]byte{}
 					m["Josiah Edward Bartlet"] = []byte("Martin Sheen")
@@ -359,7 +522,7 @@ var _ = Describe("Format", func() {
 				Expect(Object(s, 1)).Should(match("format_test.SimpleStruct", `{Name: "Oswald", Enumeration: 17, Veritas: true, Data: "datum", secret: 1983}`))
 			})
 
-			Context("when the struct contains long entries", func() {
+			When("the struct contains long entries", func() {
 				It("should format the entries with new lines", func() {
 					s := &SimpleStruct{
 						Name:        "Mithrandir Gandalf Greyhame",
@@ -436,10 +599,48 @@ var _ = Describe("Format", func() {
 			})
 		})
 
+		Describe("formatting nested interface{} types", func() {
+			It("should print out the types of the container and value", func() {
+				Expect(Object([]interface{}{"foo"}, 1)).
+					To(match("[]interface {} | len:1, cap:1", `[<string>"foo"]`))
+
+				Expect(Object(map[string]interface{}{"foo": true}, 1)).
+					To(match("map[string]interface {} | len:1", `{"foo": <bool>true}`))
+
+				Expect(Object(struct{ A interface{} }{A: 1}, 1)).
+					To(match("struct { A interface {} }", "{A: <int>1}"))
+
+				v := struct{ A interface{} }{A: struct{ B string }{B: "foo"}}
+				Expect(Object(v, 1)).To(match(`struct { A interface {} }`, `{
+        A: <struct { B string }>{B: "foo"},
+    }`))
+			})
+		})
+
 		Describe("formatting times", func() {
 			It("should format time as RFC3339", func() {
 				t := time.Date(2016, 10, 31, 9, 57, 23, 12345, time.UTC)
 				Expect(Object(t, 1)).Should(match("time.Time", `2016-10-31T09:57:23.000012345Z`))
+			})
+		})
+
+		Describe("formatting errors", func() {
+			It("should include the error() representation", func() {
+				err := fmt.Errorf("whoops: %w", fmt.Errorf("welp: %w", fmt.Errorf("ruh roh")))
+				Expect(Object(err, 1)).Should(MatchRegexp(`    \<\*fmt\.wrapError \| 0x[0-9a-f]*\>\: 
+    whoops\: welp\: ruh roh
+    \{
+        msg\: "whoops\: welp\: ruh roh",
+        err\: \<\*fmt.wrapError \| 0x[0-9a-f]*\>\{
+            msg\: "welp\: ruh roh",
+            err\: \<\*errors.errorString \| 0x[0-9a-f]*\>\{s\: "ruh roh"\},
+        \},
+    \}`))
+			})
+
+			It("should not panic if the error is a boxed nil", func() {
+				var err *CustomError
+				Expect(Object(err, 1)).Should(Equal("    <*format_test.CustomError | 0x0>: nil"))
 			})
 		})
 	})
@@ -484,7 +685,7 @@ var _ = Describe("Format", func() {
         byteArrValue: \[17, 20, 32\],
         mapValue: %s,
         structValue: {Exported: "exported"},
-        interfaceValue: {"a key": 17},
+        interfaceValue: <map\[string\]int \| len:1>{"a key": 17},
     }`, s.chanValue, s.funcValue, hashMatchingRegexp(`"a key": 20`, `"b key": 30`))
 
 			Expect(Object(s, 1)).Should(matchRegexp(`format_test\.SecretiveStruct`, expected))
@@ -500,7 +701,7 @@ var _ = Describe("Format", func() {
 			outerHash["integer"] = 2
 			outerHash["map"] = innerHash
 
-			expected := hashMatchingRegexp(`"integer": 2`, `"map": {"inner": 3}`)
+			expected := hashMatchingRegexp(`"integer": <int>2`, `"map": <map\[string\]int \| len:1>{"inner": 3}`)
 			Expect(Object(outerHash, 1)).Should(matchRegexp(`map\[string\]interface {} \| len:2`, expected))
 		})
 	})
@@ -535,35 +736,92 @@ var _ = Describe("Format", func() {
 			UseStringerRepresentation = false
 		})
 
-		Context("when passed a GoStringer", func() {
+		When("passed a GoStringer", func() {
 			It("should use what GoString() returns", func() {
 				Expect(Object(GoStringer{}, 1)).Should(ContainSubstring("<format_test.GoStringer>: go-string"))
 			})
 		})
 
-		Context("when passed a stringer", func() {
+		When("passed a stringer", func() {
 			It("should use what String() returns", func() {
 				Expect(Object(Stringer{}, 1)).Should(ContainSubstring("<format_test.Stringer>: string"))
+			})
+		})
+
+		When("passed a GomegaStringer", func() {
+			It("should use what GomegaString() returns", func() {
+				Expect(Object(gomegaStringer{}, 1)).Should(ContainSubstring("<format_test.gomegaStringer>: gomegastring"))
+				UseStringerRepresentation = false
+				Expect(Object(gomegaStringer{}, 1)).Should(ContainSubstring("<format_test.gomegaStringer>: gomegastring"))
+			})
+
+			It("should use what GomegaString() returns, disregarding MaxLength", func() {
+				Expect(Object(gomegaStringerLong{}, 1)).Should(Equal("    <format_test.gomegaStringerLong>: " + strings.Repeat("s", MaxLength*2)))
+				UseStringerRepresentation = false
+				Expect(Object(gomegaStringerLong{}, 1)).Should(Equal("    <format_test.gomegaStringerLong>: " + strings.Repeat("s", MaxLength*2)))
+			})
+
+			It("should indent what the GomegaString() returns", func() {
+				Expect(Object(gomegaStringerMultiline{}, 1)).Should(Equal("    <format_test.gomegaStringerMultiline>: A\n        B\n        C"))
+			})
+		})
+
+		Describe("when used with a registered CustomFormatter", func() {
+			It("pases objects through the custom formatter and uses the returned format, if handled", func() {
+				cf := CustomFormatted{"bob", 17}
+				ncf := NotCustomFormatted{"bob", 17}
+				Expect(Object(cf, 0)).To(Equal("<format_test.CustomFormatted>: {Data: bob, Count: 17}"))
+				Expect(Object(ncf, 0)).To(Equal("<format_test.NotCustomFormatted>: {Data: bob, Count: 17}"))
+
+				key := RegisterCustomFormatter(customFormatter)
+				Expect(Object(cf, 0)).To(Equal("<format_test.CustomFormatted>: bob (17)"))
+				Expect(Object(ncf, 0)).To(Equal("<format_test.NotCustomFormatted>: {Data: bob, Count: 17}"))
+
+				UnregisterCustomFormatter(key)
+				Expect(Object(cf, 0)).To(Equal("<format_test.CustomFormatted>: {Data: bob, Count: 17}"))
+				Expect(Object(ncf, 0)).To(Equal("<format_test.NotCustomFormatted>: {Data: bob, Count: 17}"))
+			})
+
+			It("indents CustomFormatter output correctly", func() {
+				cf := CustomFormatted{"hey\nbob", 17}
+				DeferCleanup(UnregisterCustomFormatter, RegisterCustomFormatter(func(value interface{}) (string, bool) {
+					cf, ok := value.(CustomFormatted)
+					if !ok {
+						return "", false
+					}
+					return fmt.Sprintf("The Data:\n%s\nThe Count:%d", cf.Data, cf.Count), true
+				}))
+
+				Ω(Object(cf, 1)).Should(Equal("    <format_test.CustomFormatted>: The Data:\n        hey\n        bob\n        The Count:17"))
+
+				type Wrapped struct {
+					MyObject   CustomFormatted
+					OuterCount int
+				}
+				wrapped := Wrapped{
+					MyObject:   cf,
+					OuterCount: 10,
+				}
+				Ω(Object(wrapped, 1)).Should(Equal("    <format_test.Wrapped>: {\n        MyObject: The Data:\n            hey\n            bob\n            The Count:17,\n        OuterCount: 10,\n    }"))
+
 			})
 		})
 	})
 
 	Describe("Printing a context.Context field", func() {
-
 		type structWithContext struct {
-			Context Ctx
+			Context context.Context
 			Value   string
 		}
 
-		context := ctx{}
-		objWithContext := structWithContext{Value: "some-value", Context: &context}
+		objWithContext := structWithContext{Value: "some-value", Context: context.TODO()}
 
 		It("Suppresses the content by default", func() {
 			Expect(Object(objWithContext, 1)).Should(ContainSubstring("<suppressed context>"))
 		})
 
-		It("Doesn't supress the context if it's the object being printed", func() {
-			Expect(Object(context, 1)).ShouldNot(MatchRegexp("^.*<suppressed context>$"))
+		It("Doesn't suppress the context if it's the object being printed", func() {
+			Expect(Object(context.TODO(), 1)).ShouldNot(MatchRegexp("^.*<suppressed context>$"))
 		})
 
 		Context("PrintContextObjects is set", func() {
@@ -606,11 +864,23 @@ Expected
 to equal               |
     <string>: "...aaaaa"
 `)
+var expectedTruncatedStartSizeFailureMessageExtraDiff = strings.TrimSpace(`
+Expected
+    <string>: "...aaaaaaaaaaa"
+to equal                    |
+    <string>: "...aaaaaaaaaa"
+`)
 var expectedTruncatedStartSizeSwappedFailureMessage = strings.TrimSpace(`
 Expected
     <string>: "...aaaa"
 to equal              |
     <string>: "...aaaaa"
+`)
+var expectedTruncatedStartSizeSwappedFailureMessageExtraDiff = strings.TrimSpace(`
+Expected
+    <string>: "...aaaaaaaaa"
+to equal                   |
+    <string>: "...aaaaaaaaaa"
 `)
 var expectedTruncatedMultiByteFailureMessage = strings.TrimSpace(`
 Expected
@@ -618,10 +888,41 @@ Expected
 to equal                 |
     <string>: "...tuvwxyz"
 `)
-
 var expectedFullFailureDiff = strings.TrimSpace(`
 Expected
     <string>: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 to equal
     <string>: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaazaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+`)
+var expectedSpecialCharacterFailureMessage = strings.TrimSpace(`
+Expected
+    <string>: \n
+to equal
+    <string>: something_else
+
+`)
+var expectedDiffSmallThreshold = strings.TrimSpace(`
+Expected
+    <string>: "aba"
+to equal        |
+    <string>: "aza"
+`)
+var expectedDiffZeroMismatch = strings.TrimSpace(`
+Expected
+    <string>: aba
+to equal
+    <string>: aza
+`)
+var expectedDiffSmallThresholdZeroMismatch = strings.TrimSpace(`
+Expected
+    <string>: "...b..."
+to equal          |
+    <string>: "...z..."
+`)
+
+var expectedDiffLongMessage = strings.TrimSpace(`
+Expected
+    <string>: "...aaaaabaaaaa..."
+to equal very long message
+    <string>: "...aaaaazaaaaa..."
 `)

@@ -1,13 +1,13 @@
 package matchers_test
 
 import (
-	. "github.com/onsi/ginkgo"
+	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	. "github.com/onsi/gomega/matchers"
 )
 
 var _ = Describe("BeEquivalentTo", func() {
-	Context("when asserting that nil is equivalent to nil", func() {
+	When("asserting that nil is equivalent to nil", func() {
 		It("should error", func() {
 			success, err := (&BeEquivalentToMatcher{Expected: nil}).Match(nil)
 

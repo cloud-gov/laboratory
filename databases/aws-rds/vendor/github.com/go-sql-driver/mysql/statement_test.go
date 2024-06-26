@@ -10,6 +10,8 @@ package mysql
 
 import (
 	"bytes"
+	"database/sql/driver"
+	"encoding/json"
 	"testing"
 )
 
@@ -34,7 +36,7 @@ func TestConvertDerivedByteSlice(t *testing.T) {
 		t.Fatal("Byte slice not convertible", err)
 	}
 
-	if bytes.Compare(output.([]byte), []byte("value")) != 0 {
+	if !bytes.Equal(output.([]byte), []byte("value")) {
 		t.Fatalf("Byte slice not converted, got %#v %T", output, output)
 	}
 }
@@ -75,7 +77,7 @@ func TestConvertPointer(t *testing.T) {
 }
 
 func TestConvertSignedIntegers(t *testing.T) {
-	values := []interface{}{
+	values := []any{
 		int8(-42),
 		int16(-42),
 		int32(-42),
@@ -95,13 +97,22 @@ func TestConvertSignedIntegers(t *testing.T) {
 	}
 }
 
+type myUint64 struct {
+	value uint64
+}
+
+func (u myUint64) Value() (driver.Value, error) {
+	return u.value, nil
+}
+
 func TestConvertUnsignedIntegers(t *testing.T) {
-	values := []interface{}{
+	values := []any{
 		uint8(42),
 		uint16(42),
 		uint32(42),
 		uint64(42),
 		uint(42),
+		myUint64{uint64(42)},
 	}
 
 	for _, value := range values {
@@ -110,7 +121,7 @@ func TestConvertUnsignedIntegers(t *testing.T) {
 			t.Fatalf("%T type not convertible %s", value, err)
 		}
 
-		if output != int64(42) {
+		if output != uint64(42) {
 			t.Fatalf("%T type not converted, got %#v %T", value, output, output)
 		}
 	}
@@ -120,7 +131,21 @@ func TestConvertUnsignedIntegers(t *testing.T) {
 		t.Fatal("uint64 high-bit not convertible", err)
 	}
 
-	if output != "18446744073709551615" {
-		t.Fatalf("uint64 high-bit not converted, got %#v %T", output, output)
+	if output != ^uint64(0) {
+		t.Fatalf("uint64 high-bit converted, got %#v %T", output, output)
+	}
+}
+
+func TestConvertJSON(t *testing.T) {
+	raw := json.RawMessage("{}")
+
+	out, err := converter{}.ConvertValue(raw)
+
+	if err != nil {
+		t.Fatal("json.RawMessage was failed in convert", err)
+	}
+
+	if _, ok := out.(json.RawMessage); !ok {
+		t.Fatalf("json.RawMessage converted, got %#v %T", out, out)
 	}
 }

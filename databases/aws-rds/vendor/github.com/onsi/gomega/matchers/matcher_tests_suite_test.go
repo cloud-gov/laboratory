@@ -2,12 +2,12 @@ package matchers_test
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"testing"
 
-	. "github.com/onsi/ginkgo"
+	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/onsi/gomega/internal/gutil"
 )
 
 type myStringer struct {
@@ -34,7 +34,7 @@ func Test(t *testing.T) {
 
 func readFileContents(filePath string) []byte {
 	f := openFile(filePath)
-	b, err := ioutil.ReadAll(f)
+	b, err := gutil.ReadAll(f)
 	if err != nil {
 		panic(fmt.Errorf("failed to read file contents: %v", err))
 	}

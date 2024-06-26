@@ -1,17 +1,7 @@
 // Copyright 2018 @wwanderley
 //
 //
-//    Licensed under the Apache License, Version 2.0 (the "License");
-//    you may not use this file except in compliance with the License.
-//    You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-//    Unless required by applicable law or agreed to in writing, software
-//    distributed under the License is distributed on an "AS IS" BASIS,
-//    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-//    See the License for the specific language governing permissions and
-//    limitations under the License.
+// SPDX-License-Identifier: UPL-1.0 OR Apache-2.0
 
 package goracle_test
 
@@ -23,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pkg/errors"
+	errors "golang.org/x/xerrors"
 
 	goracle "gopkg.in/goracle.v2"
 )
@@ -47,7 +37,7 @@ func TestHeterogeneousPoolIntegration(t *testing.T) {
 
 	var testHeterogeneousDB *sql.DB
 	if testHeterogeneousDB, err = sql.Open("goracle", testHeterogeneousConStr); err != nil {
-		t.Fatal(errors.Wrap(err, testHeterogeneousConStr))
+		t.Fatal(errors.Errorf("%s: %w", testHeterogeneousConStr, err))
 	}
 	defer testHeterogeneousDB.Close()
 
@@ -67,7 +57,7 @@ func TestHeterogeneousPoolIntegration(t *testing.T) {
 		fmt.Sprintf("ALTER USER %s GRANT CONNECT THROUGH %s", proxyUser, username),
 	} {
 		if _, err := conn.ExecContext(ctx, qry); err != nil {
-			t.Skip(errors.Wrap(err, qry))
+			t.Skip(errors.Errorf("%s: %w", qry, err))
 		}
 	}
 

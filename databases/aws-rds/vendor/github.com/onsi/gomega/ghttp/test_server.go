@@ -37,8 +37,8 @@ A more comprehensive example is available at https://onsi.github.io/gomega/#_tes
 				))
 			})
 
-			Context("when requesting all sprockets", func() {
-				Context("when the response is succesful", func() {
+			When("requesting all sprockets", func() {
+				When("the response is successful", func() {
 					BeforeEach(func() {
 						sprockets = []Sprocket{
 							NewSprocket("Alfalfa"),
@@ -51,7 +51,7 @@ A more comprehensive example is available at https://onsi.github.io/gomega/#_tes
 					})
 				})
 
-				Context("when the response is missing", func() {
+				When("the response is missing", func() {
 					BeforeEach(func() {
 						statusCode = http.StatusNotFound
 					})
@@ -61,7 +61,7 @@ A more comprehensive example is available at https://onsi.github.io/gomega/#_tes
 					})
 				})
 
-				Context("when the response fails to authenticate", func() {
+				When("the response fails to authenticate", func() {
 					BeforeEach(func() {
 						statusCode = http.StatusUnauthorized
 					})
@@ -73,7 +73,7 @@ A more comprehensive example is available at https://onsi.github.io/gomega/#_tes
 					})
 				})
 
-				Context("when the response is a server failure", func() {
+				When("the response is a server failure", func() {
 					BeforeEach(func() {
 						statusCode = http.StatusInternalServerError
 					})
@@ -86,7 +86,7 @@ A more comprehensive example is available at https://onsi.github.io/gomega/#_tes
 				})
 			})
 
-			Context("when requesting some sprockets", func() {
+			When("requesting some sprockets", func() {
 				BeforeEach(func() {
 					sprockets = []Sprocket{
 						NewSprocket("Alfalfa"),
@@ -103,12 +103,14 @@ A more comprehensive example is available at https://onsi.github.io/gomega/#_tes
 		})
 	})
 */
+
+// untested sections: 5
+
 package ghttp
 
 import (
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
@@ -118,6 +120,7 @@ import (
 	"sync"
 
 	. "github.com/onsi/gomega"
+	"github.com/onsi/gomega/internal/gutil"
 )
 
 func new() *Server {
@@ -266,7 +269,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	} else {
 		s.rwMutex.Unlock()
 		if s.GetAllowUnhandledRequests() {
-			ioutil.ReadAll(req.Body)
+			gutil.ReadAll(req.Body)
 			req.Body.Close()
 			w.WriteHeader(s.GetUnhandledRequestStatusCode())
 		} else {

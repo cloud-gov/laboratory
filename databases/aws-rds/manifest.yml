@@ -5,5 +5,5 @@ applications:
     env:
       GOVERSION: go1.22
       GOPACKAGENAME: aws-rds
-      CGO_CFLAGS: -Isrc/github.com/18f/databases/aws-rds/include
+      CGO_CFLAGS: -Isrc/github.com/cloud-gov/databases/aws-rds/include
       LD_LIBRARY_PATH: "/home/vcap/app/include/oracle:$LD_LIBRARY_PATH"

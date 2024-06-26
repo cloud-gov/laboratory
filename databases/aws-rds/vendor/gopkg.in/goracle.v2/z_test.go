@@ -1,17 +1,7 @@
 // Copyright 2017 Tamás Gulácsi
 //
 //
-//    Licensed under the Apache License, Version 2.0 (the "License");
-//    you may not use this file except in compliance with the License.
-//    You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-//    Unless required by applicable law or agreed to in writing, software
-//    distributed under the License is distributed on an "AS IS" BASIS,
-//    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-//    See the License for the specific language governing permissions and
-//    limitations under the License.
+// SPDX-License-Identifier: UPL-1.0 OR Apache-2.0
 
 package goracle_test
 
@@ -27,6 +17,7 @@ import (
 	"math"
 	"math/rand"
 	"os"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"strconv"
@@ -37,8 +28,8 @@ import (
 
 	"github.com/go-kit/kit/log"
 	"github.com/google/go-cmp/cmp"
-	"github.com/pkg/errors"
 	"golang.org/x/sync/errgroup"
+	errors "golang.org/x/xerrors"
 
 	goracle "gopkg.in/goracle.v2"
 )
@@ -53,7 +44,7 @@ var (
 
 var tblSuffix = "_" + strings.Replace(runtime.Version(), ".", "#", -1)
 
-const maxSessions = 64
+const maxSessions = 16
 
 func init() {
 	logger := &log.SwapLogger{}
@@ -61,14 +52,85 @@ func init() {
 	if os.Getenv("VERBOSE") == "1" {
 		logger.Swap(tl)
 	}
+	if os.Getenv("GORACLE_DRV_USERNAME") == "" &&
+		(os.Getenv("GORACLE_DRV_TEST_DB") == "" || os.Getenv("TNS_ADMIN") == "") {
+		wd, err := os.Getwd()
+		if err != nil {
+			panic(err)
+		}
+		wd = filepath.Join(wd, "contrib", "goracle.db")
+		tempDir, err := ioutil.TempDir("", "goracle_drv_test-")
+		if err != nil {
+			panic(err)
+		}
+		//defer os.RemoveAll(tempDir)
+		for _, nm := range []string{"tnsnames.ora", "cwallet.sso", "ewallet.p12"} {
+			sfh, err := os.Open(filepath.Join(wd, nm))
+			if err != nil {
+				panic(err)
+			}
+			dfh, err := os.Create(filepath.Join(tempDir, nm))
+			if err != nil {
+				sfh.Close()
+				panic(err)
+			}
+			_, err = io.Copy(dfh, sfh)
+			sfh.Close()
+			dfh.Close()
+			if err != nil {
+				panic(err)
+			}
+		}
+		b, err := ioutil.ReadFile(filepath.Join(wd, "sqlnet.ora"))
+		if err != nil {
+			panic(err)
+		}
+		if err = ioutil.WriteFile(
+			filepath.Join(tempDir, "sqlnet.ora"),
+			bytes.Replace(b,
+				[]byte(`DIRECTORY="?/network/admin"`),
+				[]byte(`DIRECTORY="`+wd+`"`), 1),
+			0644,
+		); err != nil {
+			panic(err)
+		}
+
+		fn := filepath.Join(wd, "env.sh")
+		fmt.Println("Using default database for tests: ", fn)
+		fmt.Printf("export TNS_ADMIN=%s\n", wd)
+		os.Setenv("TNS_ADMIN", tempDir)
+
+		if b, err = ioutil.ReadFile(fn); err != nil {
+			fmt.Println(err)
+		} else {
+			const prefix = "export GORACLE_DRV_TEST_"
+			for _, line := range bytes.Split(b, []byte{'\n'}) {
+				if !bytes.HasPrefix(line, []byte(prefix)) {
+					continue
+				}
+				line = line[len(prefix):]
+				i := bytes.IndexByte(line, '=')
+				if i < 0 {
+					continue
+				}
+				k, v := string(line[:i]), string(line[i+1:])
+				fmt.Printf("export GORACLE_DRV_TEST_%s=%s\n", k, v)
+				os.Setenv("GORACLE_DRV_TEST_"+k, v)
+			}
+		}
+	}
 
 	P := goracle.ConnectionParams{
 		Username:    os.Getenv("GORACLE_DRV_TEST_USERNAME"),
 		Password:    os.Getenv("GORACLE_DRV_TEST_PASSWORD"),
 		SID:         os.Getenv("GORACLE_DRV_TEST_DB"),
 		MinSessions: 1, MaxSessions: maxSessions, PoolIncrement: 1,
-		ConnClass:    "POOLED",
-		EnableEvents: true,
+		StandaloneConnection: os.Getenv("GORACLE_DRV_TEST_STANDALONE") == "1",
+		WaitTimeout:          10 * time.Second,
+		MaxLifeTime:          5 * time.Minute,
+		SessionTimeout:       30 * time.Second,
+		ConnClass:            "POOLED",
+		EnableEvents:         true,
 	}
 	if strings.HasSuffix(strings.ToUpper(P.Username), " AS SYSDBA") {
 		P.IsSysDBA, P.Username = true, P.Username[:len(P.Username)-10]
@@ -76,23 +138,28 @@ func init() {
 	testConStr = P.StringWithPassword()
 	var err error
 	if testDb, err = sql.Open("goracle", testConStr); err != nil {
-		fmt.Printf("ERROR: %+v\n", err)
-		return
-		//panic(err)
+		panic(errors.Errorf("%s: %w", err, testConStr))
 	}
 
-	if testDb != nil {
-		if clientVersion, err = goracle.ClientVersion(testDb); err != nil {
-			fmt.Printf("ERROR: %+v\n", err)
-			return
-		}
-		if serverVersion, err = goracle.ServerVersion(testDb); err != nil {
-			fmt.Printf("ERROR: %+v\n", err)
-			return
-		}
-		fmt.Println("Server:", serverVersion)
-		fmt.Println("Client:", clientVersion)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cx, err := goracle.DriverConn(ctx, testDb)
+	if err != nil {
+		panic(errors.Errorf("%s: %w", testConStr, err))
 	}
+	if clientVersion, err = cx.ClientVersion(); err != nil {
+		panic(err)
+	}
+	fmt.Println("Client:", clientVersion, "Timezone:", time.Local.String())
+	if serverVersion, err = cx.ServerVersion(); err != nil {
+		panic(err)
+	}
+	dbTZ := cx.Timezone()
+	fmt.Println("Server:", serverVersion, "Timezone:", dbTZ.String())
+
+	testDb.SetMaxIdleConns(maxSessions >> 1)
+	testDb.SetMaxOpenConns(maxSessions)
+	testDb.SetConnMaxLifetime(10 * time.Minute)
 }
 
 var bufPool = sync.Pool{New: func() interface{} { return bytes.NewBuffer(make([]byte, 0, 1024)) }}
@@ -170,7 +237,7 @@ func TestDescribeQuery(t *testing.T) {
 	const qry = "SELECT * FROM user_tab_cols"
 	cols, err := goracle.DescribeQuery(ctx, testDb, qry)
 	if err != nil {
-		t.Fatal(errors.Wrap(err, qry))
+		t.Fatal(errors.Errorf("%s: %w", qry, err))
 	}
 	t.Log(cols)
 }
@@ -294,7 +361,17 @@ END;
 		}
 	}
 
-	epoch := time.Date(2017, 11, 20, 12, 14, 21, 0, time.Local)
+	tx, err := testDb.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	qry = fmt.Sprintf("ALTER SESSION SET time_zone = 'UTC'")
+	if _, err = tx.ExecContext(ctx, qry); err != nil {
+		t.Fatal(errors.Errorf("%s: %w", qry, err))
+	}
+
+	epoch := time.Date(2017, 11, 20, 12, 14, 21, 0, time.UTC)
 	for name, tC := range map[string]struct {
 		In   interface{}
 		Want string
@@ -312,18 +389,18 @@ END;
 			In:   []string{"a", "", "cCc"},
 			Want: "1:a\n2:\n3:cCc\n",
 		},
-		"dt_3": {
-			In:   []time.Time{epoch, epoch.AddDate(0, 0, -1), epoch.AddDate(0, 0, -2)},
-			Want: "1:2017-11-20T12:14:21\n2:2017-11-19T12:14:21\n3:2017-11-18T12:14:21\n",
+		"dt_2": {
+			In:   []time.Time{epoch, epoch.AddDate(0, -6, 0)},
+			Want: "1:2017-11-20T12:14:21\n2:2017-05-20T12:14:21\n",
 		},
 	} {
 		typ := strings.SplitN(name, "_", 2)[0]
 		qry := "BEGIN :1 := " + pkg + ".in_" + typ + "(:2); END;"
 		var res string
-		if _, err := testDb.ExecContext(ctx, qry, goracle.PlSQLArrays,
+		if _, err := tx.ExecContext(ctx, qry, goracle.PlSQLArrays,
 			sql.Out{Dest: &res}, tC.In,
 		); err != nil {
-			t.Error(errors.Wrapf(err, "%q. %s %+v", name, qry, tC.In))
+			t.Error(errors.Errorf("%q. %s %+v: %w", name, qry, tC.In, err))
 		}
 		t.Logf("%q. %q", name, res)
 		if typ == "num" {
@@ -376,6 +453,9 @@ func TestInOutArray(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
+	if _, err = conn.ExecContext(ctx, "ALTER SESSION SET time_zone = local"); err != nil {
+		t.Fatal(err)
+	}
 
 	pkg := strings.ToUpper("test_pkg" + tblSuffix)
 	qry := `CREATE OR REPLACE PACKAGE ` + pkg + ` AS
@@ -442,11 +522,12 @@ BEGIN
   DBMS_OUTPUT.PUT_LINE('p_dt.COUNT='||p_dt.COUNT||' FIRST='||p_dt.FIRST||' LAST='||p_dt.LAST);
   v_idx := p_dt.FIRST;
   WHILE v_idx IS NOT NULL LOOP
-  DBMS_OUTPUT.PUT_LINE(v_idx||'='||TO_CHAR(p_dt(v_idx), 'YYYY-MM-DD HH24:MI:SS'));
+    DBMS_OUTPUT.PUT_LINE(v_idx||'='||TO_CHAR(p_dt(v_idx), 'YYYY-MM-DD HH24:MI:SS'));
     p_dt(v_idx) := NVL(p_dt(v_idx) + 1, TRUNC(SYSDATE)-v_idx);
 	v_idx := p_dt.NEXT(v_idx);
   END LOOP;
   p_dt(NVL(p_dt.LAST, 0)+1) := TRUNC(SYSDATE);
+  DBMS_OUTPUT.PUT_LINE('p_dt.COUNT='||p_dt.COUNT||' FIRST='||p_dt.FIRST||' LAST='||p_dt.LAST);
 END;
 
 PROCEDURE p2(
@@ -488,19 +569,36 @@ END;
 	numWant := []goracle.Number{"1.57", "-1.24", "2"}
 	vc := []string{"string", "bring", ""}[:2]
 	vcWant := []string{"string +", "bring +", "2"}
-	dt := []time.Time{time.Date(2017, 6, 18, 7, 5, 51, 0, time.Local), {}, {}}[:2]
-	today := time.Now().Truncate(24 * time.Hour)
-	today = time.Date(today.Year(), today.Month(), today.Day(), today.Hour(), today.Minute(), today.Second(), 0, time.Local)
-	dtWant := []time.Time{
-		dt[0].Add(24 * time.Hour),
+	var today time.Time
+	qry = "SELECT TRUNC(SYSDATE) FROM DUAL"
+	if testDb.QueryRowContext(ctx, qry).Scan(&today); err != nil {
+		t.Fatal(err)
+	}
+	dt := []time.Time{
+		time.Date(2017, 6, 18, 7, 5, 51, 0, time.Local),
+		{},
 		today.Add(-2 * 24 * time.Hour),
 		today,
 	}
+	dt[1] = dt[0].Add(24 * time.Hour)
+	dtWant := make([]time.Time, len(dt))
+	for i, d := range dt {
+		if i < len(dt)-1 {
+			// p_dt(v_idx) := NVL(p_dt(v_idx) + 1, TRUNC(SYSDATE)-v_idx);
+			dtWant[i] = d.AddDate(0, 0, 1)
+		} else {
+			//p_dt(NVL(p_dt.LAST, 0)+1) := TRUNC(SYSDATE);
+			dtWant[i] = d
+		}
+	}
+	dt = dt[:len(dt)-1]
 
-	goracle.EnableDbmsOutput(ctx, testDb)
+	goracle.EnableDbmsOutput(ctx, conn)
 
 	opts := []cmp.Option{
 		cmp.Comparer(func(x, y time.Time) bool {
+			return x.Equal(y)
+
 			d := x.Sub(y)
 			if d < 0 {
 				d *= -1
@@ -526,20 +624,23 @@ END;
 			nm := strings.SplitN(tC.Name, "-", 2)[0]
 			qry = "BEGIN " + pkg + ".inout_" + nm + "(:1); END;"
 			dst := copySlice(tC.In)
-			if _, err := testDb.ExecContext(ctx, qry,
+			if _, err := conn.ExecContext(ctx, qry,
 				goracle.PlSQLArrays,
 				sql.Out{Dest: dst, In: true},
 			); err != nil {
-				t.Fatalf("%s\n%+v", qry, err)
+				t.Fatalf("%s\n%#v\n%+v", qry, dst, err)
+			}
+			got := reflect.ValueOf(dst).Elem().Interface()
+			if nm == "dt" {
+				t.Logf("\nin =%v\ngot=%v\nwt= %v", tC.In, got, tC.Want)
 			}
 
-			got := reflect.ValueOf(dst).Elem().Interface()
 			if cmp.Equal(got, tC.Want, opts...) {
 				return
 			}
-			t.Errorf("%s: %s", tC.Name, cmp.Diff(got, tC.Want))
+			t.Errorf("%s: %s", tC.Name, cmp.Diff(printSlice(tC.Want), printSlice(got)))
 			var buf bytes.Buffer
-			if err := goracle.ReadDbmsOutput(ctx, &buf, testDb); err != nil {
+			if err := goracle.ReadDbmsOutput(ctx, &buf, conn); err != nil {
 				t.Error(err)
 			}
 			t.Log("OUTPUT:", buf.String())
@@ -548,7 +649,7 @@ END;
 
 	//lob := []goracle.Lob{goracle.Lob{IsClob: true, Reader: strings.NewReader("abcdef")}}
 	t.Run("p2", func(t *testing.T) {
-		if _, err := testDb.ExecContext(ctx,
+		if _, err := conn.ExecContext(ctx,
 			"BEGIN "+pkg+".p2(:1, :2, :3); END;",
 			goracle.PlSQLArrays,
 			//sql.Out{Dest: &intgr, In: true},
@@ -586,6 +687,9 @@ func TestOutParam(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
+	if _, err = conn.ExecContext(ctx, "ALTER SESSION SET time_zone = local"); err != nil {
+		t.Fatal(err)
+	}
 	pkg := strings.ToUpper("test_p1" + tblSuffix)
 	qry := `CREATE OR REPLACE PROCEDURE
 ` + pkg + `(p_int IN OUT INTEGER, p_num IN OUT NUMBER, p_vc IN OUT VARCHAR2, p_dt IN OUT DATE, p_lob IN OUT CLOB)
@@ -597,15 +701,15 @@ BEGIN
   p_dt := NVL(p_dt + 1, SYSDATE);
   p_lob := NULL;
 END;`
-	if _, err = testDb.ExecContext(ctx, qry); err != nil {
+	if _, err = conn.ExecContext(ctx, qry); err != nil {
 		t.Fatal(err, qry)
 	}
 	defer testDb.Exec("DROP PROCEDURE " + pkg)
 
 	qry = "BEGIN " + pkg + "(:1, :2, :3, :4, :5); END;"
-	stmt, err := testDb.PrepareContext(ctx, qry)
+	stmt, err := conn.PrepareContext(ctx, qry)
 	if err != nil {
-		t.Fatal(errors.Wrap(err, qry))
+		t.Fatal(errors.Errorf("%s: %w", qry, err))
 	}
 	defer stmt.Close()
 
@@ -621,7 +725,7 @@ END;`
 		sql.Out{Dest: &dt, In: true},
 		sql.Out{Dest: &lob, In: true},
 	); err != nil {
-		t.Fatal(errors.Wrap(err, qry))
+		t.Fatal(errors.Errorf("%s: %w", qry, err))
 	}
 	t.Logf("int=%#v num=%#v vc=%#v dt=%#v", intgr, num, vc, dt)
 	if intgr != 6 {
@@ -708,16 +812,11 @@ func TestExecuteMany(t *testing.T) {
 	t.Parallel()
 	defer tl.enableLogging(t)()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	conn, err := testDb.Conn(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
 	tbl := "test_em" + tblSuffix
-	conn.ExecContext(ctx, "DROP TABLE "+tbl)
-	conn.ExecContext(ctx, "CREATE TABLE "+tbl+" (f_id INTEGER, f_int INTEGER, f_num NUMBER, f_num_6 NUMBER(6), F_num_5_2 NUMBER(5,2), f_vc VARCHAR2(30), F_dt DATE)")
+	testDb.ExecContext(ctx, "DROP TABLE "+tbl)
+	testDb.ExecContext(ctx, "CREATE TABLE "+tbl+" (f_id INTEGER, f_int INTEGER, f_num NUMBER, f_num_6 NUMBER(6), F_num_5_2 NUMBER(5,2), f_vc VARCHAR2(30), F_dt DATE)")
 	defer testDb.Exec("DROP TABLE " + tbl)
 
 	const num = 1000
@@ -727,6 +826,15 @@ func TestExecuteMany(t *testing.T) {
 	floats := make([]float64, num)
 	strs := make([]string, num)
 	dates := make([]time.Time, num)
+
+	tx, err := testDb.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, "ALTER SESSION SET time_zone = local"); err != nil {
+		t.Fatal(err)
+	}
 	// This is instead of now: a nice moment in time right before the summer time shift
 	now := time.Date(2017, 10, 29, 1, 27, 53, 0, time.Local).Truncate(time.Second)
 	ids := make([]int, num)
@@ -750,7 +858,7 @@ func TestExecuteMany(t *testing.T) {
 		{"f_vc", strs},
 		{"f_dt", dates},
 	} {
-		res, execErr := conn.ExecContext(ctx,
+		res, execErr := tx.ExecContext(ctx,
 			"INSERT INTO "+tbl+" ("+tc.Name+") VALUES (:1)", //nolint:gas
 			tc.Value)
 		if execErr != nil {
@@ -764,10 +872,16 @@ func TestExecuteMany(t *testing.T) {
 			t.Errorf("%d. %q: wanted %d rows, got %d", i, tc.Name, num, ra)
 		}
 	}
+	tx.Rollback()
 
-	conn.ExecContext(ctx, "TRUNCATE TABLE "+tbl+"")
+	testDb.ExecContext(ctx, "TRUNCATE TABLE "+tbl+"")
 
-	res, err := conn.ExecContext(ctx,
+	if tx, err = testDb.BeginTx(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	res, err := tx.ExecContext(ctx,
 		`INSERT INTO `+tbl+ //nolint:gas
 			` (f_id, f_int, f_num, f_num_6, F_num_5_2, F_vc, F_dt)
 			VALUES
@@ -783,7 +897,7 @@ func TestExecuteMany(t *testing.T) {
 		t.Errorf("wanted %d rows, got %d", num, ra)
 	}
 
-	rows, err := conn.QueryContext(ctx,
+	rows, err := tx.QueryContext(ctx,
 		"SELECT * FROM "+tbl+" ORDER BY F_id", //nolint:gas
 	)
 	if err != nil {
@@ -821,8 +935,13 @@ func TestExecuteMany(t *testing.T) {
 			t.Errorf("%d. VC got %q, wanted %q.", i, vc, strs[i])
 		}
 		t.Logf("%d. dt=%v", i, dt)
-		if dt != dates[i] {
-			t.Errorf("%d. got DT %v, wanted %v.", i, dt, dates[i])
+		if !dt.Equal(dates[i]) {
+			if fmt.Sprintf("%v", dt) == "2017-10-29 02:27:53 +0100 CET" &&
+				fmt.Sprintf("%v", dates[i]) == "2017-10-29 00:27:53 +0000 UTC" {
+				t.Logf("%d. got DT %v, wanted %v (%v)", i, dt, dates[i], dt.Sub(dates[i]))
+			} else {
+				t.Errorf("%d. got DT %v, wanted %v (%v)", i, dt, dates[i], dt.Sub(dates[i]))
+			}
 		}
 		i++
 	}
@@ -932,7 +1051,7 @@ func TestReadWriteLob(t *testing.T) {
 	qry := "SELECT CURSOR(SELECT f_id, f_clob FROM " + tbl + " WHERE ROWNUM <= 10) FROM DUAL"
 	rows, err = testDb.QueryContext(ctx, qry, goracle.ClobAsString())
 	if err != nil {
-		t.Fatal(errors.Wrap(err, qry))
+		t.Fatal(errors.Errorf("%s: %w", qry, err))
 	}
 	defer rows.Close()
 	for rows.Next() {
@@ -962,52 +1081,25 @@ func TestReadWriteLob(t *testing.T) {
 
 }
 
+func printSlice(orig interface{}) interface{} {
+	ro := reflect.ValueOf(orig)
+	if ro.Kind() == reflect.Ptr {
+		ro = ro.Elem()
+	}
+	ret := make([]string, 0, ro.Len())
+	for i := 0; i < ro.Len(); i++ {
+		ret = append(ret, fmt.Sprintf("%v", ro.Index(i).Interface()))
+	}
+	return ret
+}
 func copySlice(orig interface{}) interface{} {
 	ro := reflect.ValueOf(orig)
 	rc := reflect.New(reflect.TypeOf(orig)).Elem() // *[]s
-	rc.Set(reflect.MakeSlice(ro.Type(), ro.Len(), ro.Cap()))
+	rc.Set(reflect.MakeSlice(ro.Type(), ro.Len(), ro.Cap()+1))
 	for i := 0; i < ro.Len(); i++ {
 		rc.Index(i).Set(ro.Index(i))
 	}
 	return rc.Addr().Interface()
-}
-
-func TestObject(t *testing.T) {
-	t.Parallel()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	conn, err := testDb.Conn(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
-	pkg := strings.ToUpper("test_pkg_obj" + tblSuffix)
-	qry := `CREATE OR REPLACE PACKAGE ` + pkg + ` IS
-  TYPE int_tab_typ IS TABLE OF PLS_INTEGER INDEX BY PLS_INTEGER;
-  TYPE rec_typ IS RECORD (int PLS_INTEGER, num NUMBER, vc VARCHAR2(1000), c CHAR(1000), dt DATE);
-  TYPE tab_typ IS TABLE OF rec_typ INDEX BY PLS_INTEGER;
-END;`
-	if _, err = conn.ExecContext(ctx, qry); err != nil {
-		t.Fatal(errors.Wrap(err, qry))
-	}
-	defer testDb.Exec("DROP PACKAGE " + pkg)
-
-	tx, err := conn.BeginTx(ctx, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tx.Rollback()
-
-	defer tl.enableLogging(t)()
-	ot, err := goracle.GetObjectType(tx, pkg+".int_tab_typ")
-	if err != nil {
-		if clientVersion.Version >= 12 && serverVersion.Version >= 12 {
-			t.Fatal(fmt.Sprintf("%+v", err))
-		}
-		t.Log(err)
-		t.Skip("client or server version < 12")
-	}
-	t.Log(ot)
 }
 
 func TestOpenClose(t *testing.T) {
@@ -1022,7 +1114,11 @@ func TestOpenClose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Error("CLOSE:", err)
+		}
+	}()
 	db.SetMaxIdleConns(1)
 	db.SetMaxOpenConns(3)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1101,6 +1197,9 @@ func TestOpenBadMemory(t *testing.T) {
 		t.Logf("Allocated %d: %d", i+1, mem.Alloc)
 	}
 	d := mem.Alloc - zero
+	if mem.Alloc < zero {
+		d = 0
+	}
 	t.Logf("atlast: %d", d)
 	if d > 64<<10 {
 		t.Errorf("Consumed more than 64KiB of memory: %d", d)
@@ -1119,7 +1218,7 @@ func TestSelectFloat(t *testing.T) {
 )`
 	testDb.Exec("DROP TABLE " + tbl)
 	if _, err := testDb.ExecContext(ctx, qry); err != nil {
-		t.Fatal(errors.Wrap(err, qry))
+		t.Fatal(errors.Errorf("%s: %w", qry, err))
 	}
 	defer testDb.Exec("DROP TABLE " + tbl)
 
@@ -1128,7 +1227,7 @@ func TestSelectFloat(t *testing.T) {
 		` (INT_COL, FLOAT_COL, EMPTY_INT_COL)
      VALUES (1234567, 45/10, NULL)`
 	if _, err := testDb.ExecContext(ctx, qry); err != nil {
-		t.Fatal(errors.Wrap(err, qry))
+		t.Fatal(errors.Errorf("%s: %w", qry, err))
 	}
 
 	qry = "SELECT int_col, float_col, empty_int_col FROM " + tbl //nolint:gas
@@ -1163,17 +1262,15 @@ func TestSelectFloat(t *testing.T) {
 			Dest: [3]interface{}{&i1, &i2, &i3},
 			Want: numbers{Int64: INT, Float: FLOAT},
 		},
-		"int,float,string": {
-			Dest: [3]interface{}{&n.Int, &n.Float, &n.String},
-			Want: numbers{Int: INT, Float: FLOAT},
-		},
 	} {
 		i1, i2, i3 = nil, nil, nil
 		n = numbers{}
 		F := func() error {
-			return errors.Wrap(
-				testDb.QueryRowContext(ctx, qry).Scan(tC.Dest[0], tC.Dest[1], tC.Dest[2]),
-				qry)
+			err := testDb.QueryRowContext(ctx, qry).Scan(tC.Dest[0], tC.Dest[1], tC.Dest[2])
+			if err != nil {
+				err = errors.Errorf("%s: %w", qry, err)
+			}
+			return err
 		}
 		if err := F(); err != nil {
 			if strings.HasSuffix(err.Error(), "unsupported Scan, storing driver.Value type <nil> into type *string") {
@@ -1182,7 +1279,7 @@ func TestSelectFloat(t *testing.T) {
 			}
 			noLogging := tl.enableLogging(t)
 			err = F()
-			t.Errorf("%q: %v", tName, errors.Wrap(err, qry))
+			t.Errorf("%q: %v", tName, errors.Errorf("%s: %w", qry, err))
 			noLogging()
 			continue
 		}
@@ -1244,7 +1341,7 @@ func TestRanaOraIssue244(t *testing.T) {
 	qry := "CREATE TABLE " + tableName + " (FUND_ACCOUNT VARCHAR2(18) NOT NULL, FUND_CODE VARCHAR2(6) NOT NULL, BUSINESS_FLAG NUMBER(10) NOT NULL, MONEY_TYPE VARCHAR2(3) NOT NULL)"
 	testDb.Exec("DROP TABLE " + tableName)
 	if _, err := testDb.Exec(qry); err != nil {
-		t.Fatal(errors.Wrap(err, qry))
+		t.Fatal(errors.Errorf("%s: %w", qry, err))
 	}
 	var max int
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1269,7 +1366,7 @@ func TestRanaOraIssue244(t *testing.T) {
 	qry = "INSERT INTO " + tableName + " (fund_account, fund_code, business_flag, money_type) VALUES (:1, :2, :3, :4)" //nolint:gas
 	stmt, err := testDb.Prepare(qry)
 	if err != nil {
-		t.Fatal(errors.Wrap(err, qry))
+		t.Fatal(errors.Errorf("%s: %w", qry, err))
 	}
 	fas := []string{"14900666", "1868091", "1898964", "14900397"}
 	for _, v := range fas {
@@ -1301,7 +1398,7 @@ func TestRanaOraIssue244(t *testing.T) {
 
 			stmt, err := tx.Prepare(qry)
 			if err != nil {
-				return errors.Wrapf(err, "%d.Prepare %q", i, err)
+				return errors.Errorf("%d.Prepare %q: %w", i, qry, err)
 			}
 			defer stmt.Close()
 
@@ -1309,7 +1406,7 @@ func TestRanaOraIssue244(t *testing.T) {
 				index = (index + 1) % len(fas)
 				rows, err := stmt.Query(bf, sc, fas[index])
 				if err != nil {
-					return errors.Wrapf(err, "%d.tx=%p stmt=%p %q", i, tx, stmt, qry)
+					return errors.Errorf("%d.tx=%p stmt=%p %q: %w", i, tx, stmt, qry, err)
 				}
 
 				for rows.Next() {
@@ -1338,14 +1435,14 @@ func TestRanaOraIssue244(t *testing.T) {
 			}
 		})
 	}
-	if err := grp.Wait(); err != nil && errors.Cause(err) != context.DeadlineExceeded {
-		errS := errors.Cause(err).Error()
+	if err := grp.Wait(); err != nil && !errors.Is(err, context.DeadlineExceeded) {
+		errS := errors.Unwrap(err).Error()
 		switch errS {
 		case "sql: statement is closed",
 			"sql: transaction has already been committed or rolled back":
 			return
 		}
-		if strings.Contains(errS, "ORA-12516:") {
+		if strings.Contains(errS, "ORA-12516:") || strings.Contains(errS, "ORA-24496:") {
 			t.Log(err)
 		} else {
 			t.Error(err)
@@ -1381,7 +1478,7 @@ func TestExecHang(t *testing.T) {
 	defer tl.enableLogging(t)()
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
-	done := make(chan error, 3)
+	done := make(chan error, 13)
 	var wg sync.WaitGroup
 	for i := 0; i < cap(done); i++ {
 		wg.Add(1)
@@ -1419,7 +1516,7 @@ func TestNumberNull(t *testing.T) {
 		normalNum NUMBER
 		)`
 	if _, err := testDb.ExecContext(ctx, qry); err != nil {
-		t.Fatal(errors.Wrap(err, qry))
+		t.Fatal(errors.Errorf("%s: %w", qry, err))
 	}
 	defer testDb.Exec("DROP TABLE number_test")
 
@@ -1435,12 +1532,12 @@ func TestNumberNull(t *testing.T) {
 		INTO number_test (caseNum, precisionNum, precScaleNum, normalNum) VALUES (8, 6, 9, 7)
 		SELECT 1 FROM DUAL`
 	if _, err := testDb.ExecContext(ctx, qry); err != nil {
-		t.Fatal(errors.Wrap(err, qry))
+		t.Fatal(errors.Errorf("%s: %w", qry, err))
 	}
 	qry = "SELECT precisionNum, precScaleNum, normalNum FROM number_test ORDER BY caseNum"
 	rows, err := testDb.Query(qry)
 	if err != nil {
-		t.Fatal(errors.Wrap(err, qry))
+		t.Fatal(errors.Errorf("%s: %w", qry, err))
 	}
 	defer rows.Close()
 
@@ -1462,7 +1559,7 @@ func TestNumberNull(t *testing.T) {
 
 	rows, err = testDb.Query(qry)
 	if err != nil {
-		t.Fatal(errors.Wrap(err, qry))
+		t.Fatal(errors.Errorf("%s: %w", qry, err))
 	}
 	defer rows.Close()
 
@@ -1574,7 +1671,7 @@ func TestMaxOpenCursors(t *testing.T) {
 	var openCursors sql.NullInt64
 	const qry1 = "SELECT p.value FROM v$parameter p WHERE p.name = 'open_cursors'"
 	if err := testDb.QueryRow(qry1).Scan(&openCursors); err != nil {
-		t.Log(errors.Wrap(err, qry1))
+		t.Log(errors.Errorf("%s: %w", qry1, err))
 	} else {
 		t.Logf("open_cursors=%v", openCursors)
 	}
@@ -1587,7 +1684,7 @@ func TestMaxOpenCursors(t *testing.T) {
 		var cnt int64
 		const qry2 = "DECLARE cnt PLS_INTEGER; BEGIN SELECT COUNT(0) INTO cnt FROM DUAL; :1 := cnt; END;"
 		if _, err := testDb.Exec(qry2, sql.Out{Dest: &cnt}); err != nil {
-			t.Fatal(errors.Wrapf(err, "%d. %s", i, qry2))
+			t.Fatal(errors.Errorf("%d. %s: %w", i, qry2, err))
 		}
 	}
 }
@@ -1617,14 +1714,14 @@ func TestNullIntoNum(t *testing.T) {
 	testDb.Exec("DROP TABLE test_null_num")
 	qry := "CREATE TABLE test_null_num (i NUMBER(3))"
 	if _, err := testDb.Exec(qry); err != nil {
-		t.Fatal(errors.Wrap(err, qry))
+		t.Fatal(errors.Errorf("%s: %w", qry, err))
 	}
 	defer testDb.Exec("DROP TABLE test_null_num")
 
 	qry = "INSERT INTO test_null_num (i) VALUES (:1)"
 	var i *int
 	if _, err := testDb.Exec(qry, i); err != nil {
-		t.Fatal(errors.Wrap(err, qry))
+		t.Fatal(errors.Errorf("%s: %w", qry, err))
 	}
 }
 
@@ -1670,7 +1767,7 @@ func TestExecTimeout(t *testing.T) {
 	defer tl.enableLogging(t)()
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	if _, err := testDb.ExecContext(ctx, "SELECT COUNT(DISTINCT ORA_HASH(A.table_name)) from cat, cat, cat A"); err != nil {
+	if _, err := testDb.ExecContext(ctx, "DECLARE cnt PLS_INTEGER; BEGIN SELECT COUNT(0) INTO cnt FROM (SELECT 1 FROM all_objects WHERE ROWNUM < 1000), (SELECT 1 FROM all_objects WHERE rownum < 1000); END;"); err != nil {
 		t.Log(err)
 	}
 }
@@ -1680,7 +1777,7 @@ func TestQueryTimeout(t *testing.T) {
 	defer tl.enableLogging(t)()
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	if _, err := testDb.QueryContext(ctx, "SELECT COUNT(0) FROM all_objects, all_objects"); err != nil {
+	if _, err := testDb.QueryContext(ctx, "SELECT COUNT(0) FROM (SELECT 1 FROM all_objects WHERE rownum < 1000), (SELECT 1 FROM all_objects WHERE rownum < 1000)"); err != nil {
 		t.Log(err)
 	}
 }
@@ -1703,7 +1800,7 @@ func TestSDO(t *testing.T) {
 	rows, err := testDb.QueryContext(ctx, selectQry)
 	if err != nil {
 		if !strings.Contains(err.Error(), `ORA-00904: "MDSYS"."SDO_GEOMETRY"`) {
-			t.Fatal(errors.Wrap(err, selectQry))
+			t.Fatal(errors.Errorf("%s: %w", selectQry, err))
 		}
 		for _, qry := range []string{
 			`CREATE TYPE test_sdo_point_type AS OBJECT (
@@ -1733,7 +1830,7 @@ func TestSDO(t *testing.T) {
 			testDb.ExecContext(ctx, drop)
 			t.Log(drop)
 			if _, err := testDb.ExecContext(ctx, qry); err != nil {
-				err = errors.Wrap(err, qry)
+				err = errors.Errorf("%s: %w", qry, err)
 				t.Log(err)
 				if !strings.Contains(err.Error(), "ORA-01031:") {
 					t.Fatal(err)
@@ -1745,7 +1842,7 @@ func TestSDO(t *testing.T) {
 
 		selectQry = strings.Replace(selectQry, "MDSYS.SDO_", "test_SDO_", -1)
 		if rows, err = testDb.QueryContext(ctx, selectQry); err != nil {
-			t.Fatal(errors.Wrap(err, selectQry))
+			t.Fatal(errors.Errorf("%s: %w", selectQry, err))
 		}
 
 	}
@@ -1761,7 +1858,7 @@ func TestSDO(t *testing.T) {
 		var dmp, isNull string
 		var intf interface{}
 		if err = rows.Scan(&intf, &dmp, &isNull); err != nil {
-			t.Error(errors.Wrap(err, "scan"))
+			t.Error(errors.Errorf("%s: %w", "scan", err))
 		}
 		t.Log(dmp, isNull)
 		obj := intf.(*goracle.Object)
@@ -1818,7 +1915,7 @@ func TestSelectCustomType(t *testing.T) {
 	conn.ExecContext(ctx, "DROP TABLE "+tbl)
 	qry := "CREATE TABLE " + tbl + " (nm VARCHAR2(30), typ VARCHAR2(30), id NUMBER(6), created DATE)"
 	if _, err = conn.ExecContext(ctx, qry); err != nil {
-		t.Fatal(errors.Wrap(err, qry))
+		t.Fatal(errors.Errorf("%s: %w", qry, err))
 	}
 	defer testDb.Exec("DROP TABLE " + tbl)
 
@@ -1830,7 +1927,7 @@ func TestSelectCustomType(t *testing.T) {
 	}
 	qry = "INSERT INTO " + tbl + " (nm, typ, id, created) VALUES (:1, :2, :3, :4)"
 	if _, err = conn.ExecContext(ctx, qry, nms, typs, ids, createds); err != nil {
-		t.Fatal(errors.Wrap(err, qry))
+		t.Fatal(errors.Errorf("%s: %w", qry, err))
 	}
 
 	const num = 10
@@ -1912,7 +2009,7 @@ func TestImplicitResults(t *testing.T) {
 		if strings.Contains(err.Error(), "PLS-00302:") {
 			t.Skip()
 		}
-		t.Fatal(errors.Wrap(err, qry))
+		t.Fatal(errors.Errorf("%s: %w", qry, err))
 	}
 	r := rows.(driver.RowsNextResultSet)
 	for r.HasNextResultSet() {
@@ -1928,7 +2025,7 @@ func TestStartupShutdown(t *testing.T) {
 	}
 	p, err := goracle.ParseConnString(testConStr)
 	if err != nil {
-		t.Fatal(errors.Wrap(err, testConStr))
+		t.Fatal(errors.Errorf("%s: %w", testConStr, err))
 	}
 	if !(p.IsSysDBA || p.IsSysOper) {
 		p.IsSysDBA = true
@@ -1941,7 +2038,10 @@ func TestStartupShutdown(t *testing.T) {
 		t.Fatal(err, p.StringWithPassword())
 	}
 	defer db.Close()
-	conn, err := goracle.DriverConn(db)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	conn, err := goracle.DriverConn(ctx, db)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1957,6 +2057,16 @@ func TestStartupShutdown(t *testing.T) {
 }
 
 func TestIssue134(t *testing.T) {
+	cleanup := func() {
+		for _, qry := range []string{
+			`DROP TYPE test_prj_task_tab_type`,
+			`DROP TYPE test_prj_task_obj_type`,
+			`DROP PROCEDURE test_create_task_activity`,
+		} {
+			testDb.Exec(qry)
+		}
+	}
+	cleanup()
 	const crea = `CREATE OR REPLACE TYPE test_PRJ_TASK_OBJ_TYPE AS OBJECT (
 	PROJECT_NUMBER VARCHAR2(100)
 	,SOURCE_ID VARCHAR2(100)
@@ -1969,8 +2079,8 @@ func TestIssue134(t *testing.T) {
 	,TASK_TYPE VARCHAR2(100)
 	,QUANTITY NUMBER );
 CREATE OR REPLACE TYPE test_PRJ_TASK_TAB_TYPE IS TABLE OF test_PRJ_TASK_OBJ_TYPE;
-CREATE OR REPLACE PROCEDURE test_CREATE_TASK_ACTIVITY (p_create_task_i IN PRJ_TASK_TAB_TYPE,
-	p_create_activity_i IN PRJ_ACTIVITY_TAB_TYPE,
+CREATE OR REPLACE PROCEDURE test_CREATE_TASK_ACTIVITY (
+    p_create_task_i IN test_PRJ_TASK_TAB_TYPE,
 	p_project_id_i IN NUMBER) IS BEGIN NULL; END;`
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -1979,30 +2089,36 @@ CREATE OR REPLACE PROCEDURE test_CREATE_TASK_ACTIVITY (p_create_task_i IN PRJ_TA
 			qry += ";"
 		}
 		if _, err := testDb.ExecContext(ctx, qry); err != nil {
-			t.Fatal(errors.Wrap(err, qry))
+			t.Fatal(errors.Errorf("%s: %w", qry, err))
 		}
 	}
-	defer func() {
-		for _, qry := range []string{
-			`DROP TYPE test_prj_task_tab_type`,
-			`DROP TYPE test_prj_task_obj_type`,
-			`DROP PROCEDURE test_create_task_activity`,
-		} {
-			testDb.Exec(qry)
-		}
-	}()
+	defer cleanup()
 
-	var o1, o2 goracle.Object
-	qry := "BEGIN :1 := test_prj_task_tab_type(); END;"
-	if _, err := testDb.ExecContext(ctx, qry, sql.Out{Dest: &o1}); err != nil {
-		t.Fatal(errors.Wrap(err, qry))
+	tx, err := testDb.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := testDb.ExecContext(ctx, qry, sql.Out{Dest: &o2}); err != nil {
-		t.Fatal(errors.Wrap(err, qry))
+	defer tx.Rollback()
+	conn, err := goracle.DriverConn(ctx, tx)
+	if err != nil {
+		t.Fatal(err)
 	}
-	qry = "BEGIN test_create_task_activity(:1, :2, :3); END;"
-	if _, err := testDb.ExecContext(ctx, qry, o1, o2, 1); err != nil {
-		t.Error(err)
+	ot, err := conn.GetObjectType("TEST_PRJ_TASK_TAB_TYPE")
+	if err != nil {
+		t.Fatal(err)
+	}
+	obj, err := ot.NewObject()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer obj.Close()
+	t.Logf("obj=%#v", obj)
+	qry := "BEGIN test_create_task_activity(:1, :2); END;"
+	if err := prepExec(ctx, conn, qry,
+		driver.NamedValue{Value: &obj, Ordinal: 1},
+		driver.NamedValue{Value: 1, Ordinal: 3},
+	); err != nil {
+		t.Error(errors.Errorf("%s [%#v, 1]: %w", qry, obj, err))
 	}
 }
 
@@ -2017,13 +2133,13 @@ func TestTsTZ(t *testing.T) {
 	{
 		qry := strings.Replace(qry, "{{.TZ}}", "01:00", 1)
 		if err := testDb.QueryRowContext(ctx, qry).Scan(&ts); err != nil {
-			t.Fatal(errors.Wrap(err, qry))
+			t.Fatal(errors.Errorf("%s: %w", qry, err))
 		}
 	}
 	qry = strings.Replace(qry, "{{.TZ}}", "Europe/Berlin", 1)
 	err := testDb.QueryRowContext(ctx, qry).Scan(&ts)
 	if err != nil {
-		t.Log(errors.Wrap(err, qry))
+		t.Log(errors.Errorf("%s: %w", qry, err))
 	}
 	t.Log(ts)
 	if !ts.IsZero() {
@@ -2054,27 +2170,39 @@ func TestGetDBTimeZone(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	qry := "SELECT SESSIONTIMEZONE FROM DUAL"
-	var tz string
-	if err := testDb.QueryRowContext(ctx, qry).Scan(&tz); err != nil {
-		t.Fatal(errors.Wrap(err, qry))
+	tx, err := testDb.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	t.Log("timezone:", tz)
+	defer tx.Rollback()
+	qry := "ALTER SESSION SET time_zone = 'UTC'"
+	if _, err := tx.ExecContext(ctx, qry); err != nil {
+		t.Fatal(errors.Errorf("%s: %w", qry, err))
+	}
+	qry = "SELECT DBTIMEZONE, SESSIONTIMEZONE, SYSTIMESTAMP||'', LOCALTIMESTAMP||'' FROM DUAL"
+	var dbTz, tz, sts, lts string
+	if err := tx.QueryRowContext(ctx, qry).Scan(&dbTz, &tz, &sts, &lts); err != nil {
+		t.Fatal(errors.Errorf("%s: %w", qry, err))
+	}
+	t.Log("db timezone:", dbTz, "session timezone:", tz, "systimestamp:", sts, "localtimestamp:", lts)
 
-	for _, timS := range []string{"2006-07-08", "2006-01-02"} {
-		localTime, err := time.ParseInLocation("2006-01-02", timS, time.Local)
-		if err != nil {
-			t.Fatal(err)
-		}
-		qry = "SELECT TO_DATE('" + timS + " 00:00:00', 'YYYY-MM-DD HH24:MI:SS') FROM DUAL"
+	today := time.Now().Truncate(time.Second)
+	for i, tim := range []time.Time{today, today.AddDate(0, 6, 0)} {
+		t.Log("local:", tim.Format(time.RFC3339))
+
+		qry = "SELECT :1 FROM DUAL"
 		var dbTime time.Time
-		t.Log("local:", localTime.Format(time.RFC3339))
-		if err := testDb.QueryRowContext(ctx, qry).Scan(&dbTime); err != nil {
-			t.Fatal(errors.Wrap(err, qry))
+		if err := tx.QueryRowContext(ctx, qry, tim).Scan(&dbTime); err != nil {
+			t.Fatal(errors.Errorf("%s: %w", qry, err))
 		}
 		t.Log("db:", dbTime.Format(time.RFC3339))
-		if !dbTime.Equal(localTime) {
-			t.Errorf("db says %s, local is %s", dbTime.Format(time.RFC3339), localTime.Format(time.RFC3339))
+		if !dbTime.Equal(tim) {
+			msg := fmt.Sprintf("db says %s, local is %s", dbTime.Format(time.RFC3339), tim.Format(time.RFC3339))
+			if i == 0 {
+				t.Error("ERROR:", msg)
+			} else {
+				t.Log(msg)
+			}
 		}
 	}
 }
@@ -2086,7 +2214,7 @@ func TestNumberBool(t *testing.T) {
 	const qry = "SELECT 181 id, 1 status FROM DUAL"
 	rows, err := testDb.QueryContext(ctx, qry, goracle.NumberAsString())
 	if err != nil {
-		t.Fatal(errors.Wrap(err, qry))
+		t.Fatal(errors.Errorf("%s: %w", qry, err))
 	}
 
 	for rows.Next() {
@@ -2096,5 +2224,209 @@ func TestNumberBool(t *testing.T) {
 			t.Errorf("failed to scan data: %s\n", err)
 		}
 		t.Logf("Source id=%d, status=%t\n", id, status)
+	}
+}
+
+func TestCancel(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skip cancel test")
+	}
+	db, err := sql.Open("goracle", testConStr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	pid := os.Getpid()
+	const maxConc = 10
+	db.SetMaxOpenConns(maxConc - 1)
+	db.SetMaxIdleConns(1)
+	ctx, cancel := context.WithTimeout(context.Background(), (2*maxConc+1)*time.Second)
+	defer cancel()
+	Cnt := func() int {
+		var cnt int
+		const qryCount = "SELECT COUNT(0) FROM v$session WHERE username = USER AND process = TO_CHAR(:1)"
+		if err := db.QueryRow(qryCount, pid).Scan(&cnt); err != nil {
+			if strings.Contains(err.Error(), "ORA-00942:") {
+				t.Skip(err.Error())
+			} else {
+				t.Fatal(errors.Errorf("%s: %w", qryCount, err))
+			}
+		}
+		return cnt
+	}
+
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	t.Log("Pid:", pid)
+	goal := Cnt()
+	t.Logf("Before: %d", goal)
+	const qry = "BEGIN FOR rows IN (SELECT 1 FROM DUAL) LOOP DBMS_LOCK.SLEEP(10); END LOOP; END;"
+	subCtx, subCancel := context.WithCancel(ctx)
+	var grp errgroup.Group
+	for i := 0; i < maxConc; i++ {
+		grp.Go(func() error {
+			//t.Log(qry)
+			//defer t.Log("END " + qry)
+			if _, err := db.ExecContext(subCtx, qry); err != nil && !errors.Is(err, context.Canceled) {
+				return errors.Errorf("%s: %w", qry, err)
+			}
+			return nil
+		})
+	}
+	if err = grp.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("After exec, before cancel: %d", Cnt())
+	subCancel()
+	time.Sleep(time.Second)
+	t.Logf("After cancel: %d", Cnt())
+
+	for i := 0; i < 2*maxConc; i++ {
+		cnt := Cnt()
+		t.Logf("After %ds: %d", i+1, cnt)
+		if i > maxConc && cnt <= goal {
+			return
+		}
+		time.Sleep(time.Second)
+	}
+	t.Error("cancelation timed out")
+}
+
+func TestObject(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	testCon, err := goracle.DriverConn(ctx, testDb)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cleanup := func() {
+		testDb.Exec("DROP PROCEDURE test_obj_modify")
+		testDb.Exec("DROP TYPE test_obj_tab_t")
+		testDb.Exec("DROP TYPE test_obj_rec_t")
+	}
+	cleanup()
+	const crea = `
+CREATE OR REPLACE TYPE test_obj_rec_t AS OBJECT (num NUMBER, vc VARCHAR2(1000), dt DATE);
+CREATE OR REPLACE TYPE test_obj_tab_t AS TABLE OF test_obj_rec_t;
+CREATE OR REPLACE PROCEDURE test_obj_modify(p_obj IN OUT NOCOPY test_obj_tab_t) IS
+BEGIN
+  p_obj.EXTEND;
+  p_obj(p_obj.LAST) := test_obj_rec_t(
+    num => 314/100 + p_obj.COUNT,
+    vc  => 'abraka dabra',
+    dt  => SYSDATE);
+END;`
+	for _, qry := range strings.Split(crea, "\nCREATE OR") {
+		if qry == "" {
+			continue
+		}
+		qry = "CREATE OR" + qry
+		if _, err = testDb.ExecContext(ctx, qry); err != nil {
+			t.Fatal(errors.Errorf("%s: %w", qry, err))
+		}
+	}
+
+	defer cleanup()
+
+	cOt, err := testCon.GetObjectType(strings.ToUpper("test_obj_tab_t"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Log(cOt)
+
+	// create object from the type
+	coll, err := cOt.NewCollection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer coll.Close()
+
+	// create an element object
+	elt, err := cOt.CollectionOf.NewObject()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer elt.Close()
+
+	// append to the collection
+	t.Logf("append an empty %s", elt)
+	coll.AppendObject(elt)
+
+	const mod = "BEGIN test_obj_modify(:1); END;"
+	if err = prepExec(ctx, testCon, mod, driver.NamedValue{Ordinal: 1, Value: coll}); err != nil {
+		t.Error(err)
+	}
+	t.Logf("coll: %s", coll)
+	var data goracle.Data
+	for i, err := coll.First(); err == nil; i, err = coll.Next(i) {
+		if err = coll.GetItem(&data, i); err != nil {
+			t.Fatal(err)
+		}
+		elt = data.GetObject()
+
+		t.Logf("elt[%d] : %s", i, elt)
+		for attr := range elt.Attributes {
+			val, err := elt.Get(attr)
+			if err != nil {
+				t.Error(err, attr)
+			}
+			t.Logf("elt[%d].%s=%s", i, attr, val)
+		}
+	}
+}
+
+func TestNewPassword(t *testing.T) {
+	P, err := goracle.ParseConnString(testConStr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	const user, oldPassword, newPassword = "test_expired", "oldPassw0rd_long", "newPassw0rd_longer"
+
+	testDb.Exec("DROP USER " + user)
+	// GRANT CREATE USER, DROP USER TO test
+	// GRANT CREATE SESSION TO test WITH ADMIN OPTION
+	qry := "CREATE USER " + user + " IDENTIFIED BY " + oldPassword + " PASSWORD EXPIRE"
+	if _, err := testDb.ExecContext(ctx, qry); err != nil {
+		if strings.Contains(err.Error(), "ORA-01031:") {
+			t.Log("Please issue this:\nGRANT CREATE USER, DROP USER TO " + P.Username + ";\n" +
+				"GRANT CREATE SESSION TO " + P.Username + " WITH AMDIN OPTION;\n")
+			t.Skip(err)
+		}
+		t.Fatal(err)
+	}
+	defer testDb.Exec("DROP USER " + user)
+
+	qry = "GRANT CREATE SESSION TO " + user
+	if _, err := testDb.ExecContext(ctx, qry); err != nil {
+		if strings.Contains(err.Error(), "ORA-01031:") {
+			t.Log("Please issue this:\nGRANT CREATE SESSION TO " + P.Username + " WITH ADMIN OPTION;\n")
+		}
+		t.Fatal(err)
+	}
+
+	P.Username, P.Password = user, oldPassword
+	P.StandaloneConnection = true
+	P.NewPassword = newPassword
+	{
+		db, err := sql.Open("goracle", P.StringWithPassword())
+		if err != nil {
+			t.Fatal(err)
+		}
+		db.Close()
+	}
+
+	P.Password, P.NewPassword = P.NewPassword, ""
+	{
+		db, err := sql.Open("goracle", P.StringWithPassword())
+		if err != nil {
+			t.Fatal(err)
+		}
+		db.Close()
 	}
 }

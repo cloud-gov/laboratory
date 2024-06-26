@@ -1,4 +1,5 @@
-[![Build Status](https://travis-ci.org/go-goracle/goracle.svg?branch=v2)](https://travis-ci.org/go-goracle/goracle)
+[![Travis](https://travis-ci.org/go-goracle/goracle.svg?branch=v2)](https://travis-ci.org/go-goracle/goracle)
+[![CircleCI](https://circleci.com/gh/go-goracle/goracle.svg?style=svg)](https://circleci.com/gh/go-goracle/goracle)
 [![GoDoc](https://godoc.org/gopkg.in/goracle.v2?status.svg)](http://godoc.org/gopkg.in/goracle.v2)
 [![Go Report Card](https://goreportcard.com/badge/github.com/go-goracle/goracle)](https://goreportcard.com/report/github.com/go-goracle/goracle)
 [![codecov](https://codecov.io/gh/go-goracle/goracle/branch/master/graph/badge.svg)](https://codecov.io/gh/go-goracle/goracle)
@@ -11,6 +12,9 @@ for connecting to Oracle DB, using Anthony Tuininga's excellent OCI wrapper,
 [ODPI-C](https://www.github.com/oracle/odpi).
 
 At least Go 1.11 is required!
+
+Although an Oracle client is NOT required for compiling, it is at run time.
+One can download it from https://www.oracle.com/database/technologies/instant-client/downloads.html
 
 ## Connect
 

@@ -3,7 +3,7 @@ package matchers_test
 import (
 	"errors"
 
-	. "github.com/onsi/ginkgo"
+	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	. "github.com/onsi/gomega/matchers"
 )
@@ -14,7 +14,7 @@ var _ = Describe("WithTransformMatcher", func() {
 
 	Context("Panic if transform function invalid", func() {
 		panicsWithTransformer := func(transform interface{}) {
-			ExpectWithOffset(1, func() { WithTransform(transform, nil) }).To(Panic())
+			Expect(func() { WithTransform(transform, nil) }).WithOffset(1).To(Panic())
 		}
 		It("nil", func() {
 			panicsWithTransformer(nil)
@@ -35,6 +35,49 @@ var _ = Describe("WithTransformMatcher", func() {
 				panicsWithTransformer(func(i int) (int, int) { return 5, 6 })
 			})
 		})
+		Context("Invalid number of return values, but correct number of arguments", func() {
+			It("Two return values, but second return value not an error", func() {
+				panicsWithTransformer(func(interface{}) (int, int) { return 5, 6 })
+			})
+		})
+	})
+
+	When("the actual value is incompatible", func() {
+		It("fails to pass int to func(string)", func() {
+			actual, transform := int(0), func(string) int { return 0 }
+			success, err := WithTransform(transform, Equal(0)).Match(actual)
+			Expect(success).To(BeFalse())
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("function expects 'string'"))
+			Expect(err.Error()).To(ContainSubstring("have 'int'"))
+		})
+
+		It("fails to pass string to func(interface)", func() {
+			actual, transform := "bang", func(error) int { return 0 }
+			success, err := WithTransform(transform, Equal(0)).Match(actual)
+			Expect(success).To(BeFalse())
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("function expects 'error'"))
+			Expect(err.Error()).To(ContainSubstring("have 'string'"))
+		})
+
+		It("fails to pass nil interface to func(int)", func() {
+			actual, transform := error(nil), func(int) int { return 0 }
+			success, err := WithTransform(transform, Equal(0)).Match(actual)
+			Expect(success).To(BeFalse())
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("function expects 'int'"))
+			Expect(err.Error()).To(ContainSubstring("have '<nil>'"))
+		})
+
+		It("fails to pass nil interface to func(pointer)", func() {
+			actual, transform := error(nil), func(*string) int { return 0 }
+			success, err := WithTransform(transform, Equal(0)).Match(actual)
+			Expect(success).To(BeFalse())
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("function expects '*string'"))
+			Expect(err.Error()).To(ContainSubstring("have '<nil>'"))
+		})
 	})
 
 	It("works with positive cases", func() {
@@ -51,7 +94,13 @@ var _ = Describe("WithTransformMatcher", func() {
 		Expect(S{1, "hi"}).To(WithTransform(transformer, Equal("hi")))
 
 		// transform expects interface
-		errString := func(e error) string { return e.Error() }
+		errString := func(e error) string {
+			if e == nil {
+				return "safe"
+			}
+			return e.Error()
+		}
+		Expect(nil).To(WithTransform(errString, Equal("safe")), "handles nil actual values")
 		Expect(errors.New("abc")).To(WithTransform(errString, Equal("abc")))
 	})
 
@@ -61,7 +110,7 @@ var _ = Describe("WithTransformMatcher", func() {
 	})
 
 	Context("failure messages", func() {
-		Context("when match fails", func() {
+		When("match fails", func() {
 			It("gives a descriptive message", func() {
 				m := WithTransform(plus1, Equal(3))
 				Expect(m.Match(1)).To(BeFalse())
@@ -69,11 +118,21 @@ var _ = Describe("WithTransformMatcher", func() {
 			})
 		})
 
-		Context("when match succeeds, but expected it to fail", func() {
+		When("match succeeds, but expected it to fail", func() {
 			It("gives a descriptive message", func() {
 				m := Not(WithTransform(plus1, Equal(3)))
 				Expect(m.Match(2)).To(BeFalse())
 				Expect(m.FailureMessage(2)).To(Equal("Expected\n    <int>: 3\nnot to equal\n    <int>: 3"))
+			})
+		})
+
+		When("transform fails", func() {
+			It("reports the transformation error", func() {
+				actual, trafo := "foo", func(string) (string, error) { return "", errors.New("that does not transform") }
+				success, err := WithTransform(trafo, Equal(actual)).Match(actual)
+				Expect(success).To(BeFalse())
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(MatchRegexp(": that does not transform$"))
 			})
 		})
 

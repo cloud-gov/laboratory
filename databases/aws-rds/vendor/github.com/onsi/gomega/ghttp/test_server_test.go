@@ -3,16 +3,16 @@ package ghttp_test
 import (
 	"bytes"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"net/url"
 	"regexp"
 
-	"github.com/golang/protobuf/proto"
 	"github.com/onsi/gomega/gbytes"
 	"github.com/onsi/gomega/ghttp/protobuf"
+	"github.com/onsi/gomega/internal/gutil"
+	"google.golang.org/protobuf/proto"
 
-	. "github.com/onsi/ginkgo"
+	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	. "github.com/onsi/gomega/ghttp"
 )
@@ -60,7 +60,7 @@ var _ = Describe("TestServer", func() {
 			Expect(err).ShouldNot(HaveOccurred())
 			Expect(resp.StatusCode).Should(Equal(200))
 
-			body, err := ioutil.ReadAll(resp.Body)
+			body, err := gutil.ReadAll(resp.Body)
 			resp.Body.Close()
 			Expect(err).ShouldNot(HaveOccurred())
 
@@ -70,7 +70,7 @@ var _ = Describe("TestServer", func() {
 			Expect(err).ShouldNot(HaveOccurred())
 			Expect(resp.StatusCode).Should(Equal(200))
 
-			body2, err := ioutil.ReadAll(resp.Body)
+			body2, err := gutil.ReadAll(resp.Body)
 			resp.Body.Close()
 			Expect(err).ShouldNot(HaveOccurred())
 
@@ -90,7 +90,7 @@ var _ = Describe("TestServer", func() {
 			Expect(s.GetAllowUnhandledRequests()).To(BeFalse())
 		})
 
-		Context("when true", func() {
+		When("true", func() {
 			BeforeEach(func() {
 				s.SetAllowUnhandledRequests(true)
 				s.SetUnhandledRequestStatusCode(http.StatusForbidden)
@@ -102,7 +102,7 @@ var _ = Describe("TestServer", func() {
 				Expect(err).ShouldNot(HaveOccurred())
 				Expect(resp.StatusCode).Should(Equal(http.StatusForbidden))
 
-				data, err := ioutil.ReadAll(resp.Body)
+				data, err := gutil.ReadAll(resp.Body)
 				Expect(err).ShouldNot(HaveOccurred())
 				Expect(data).Should(BeEmpty())
 			})
@@ -113,7 +113,7 @@ var _ = Describe("TestServer", func() {
 			})
 		})
 
-		Context("when false", func() {
+		When("false", func() {
 			It("should fail when attempting a request", func() {
 				failures := InterceptGomegaFailures(func() {
 					http.Get(s.URL() + "/foo")
@@ -259,8 +259,8 @@ var _ = Describe("TestServer", func() {
 				s.AppendHandlers(func(w http.ResponseWriter, req *http.Request) {
 					// Expect(true).Should(BeFalse()) <-- would be nice to do it this way, but the test just can't be written this way
 
-					By("We're cheating a bit here -- we're throwing a GINKGO_PANIC which simulates a failed assertion")
-					panic(GINKGO_PANIC)
+					By("We're cheating a bit here -- we're pretending to throw a Ginkgo panic which simulates a failed assertion")
+					panic("defer GinkgoRecover()")
 				})
 			})
 
@@ -316,7 +316,7 @@ var _ = Describe("TestServer", func() {
 				Expect(failures).Should(HaveLen(1))
 			})
 
-			Context("when passed a rawQuery", func() {
+			When("passed a rawQuery", func() {
 				It("should also be possible to verify the rawQuery", func() {
 					s.SetHandler(0, VerifyRequest("GET", "/foo", "baz=bar"))
 					resp, err = http.Get(s.URL() + "/foo?baz=bar")
@@ -336,7 +336,7 @@ var _ = Describe("TestServer", func() {
 				})
 			})
 
-			Context("when passed a matcher for path", func() {
+			When("passed a matcher for path", func() {
 				It("should apply the matcher", func() {
 					s.SetHandler(0, VerifyRequest("GET", MatchRegexp(`/foo/[a-f]*/3`)))
 					resp, err = http.Get(s.URL() + "/foo/abcdefa/3")
@@ -499,6 +499,69 @@ var _ = Describe("TestServer", func() {
 			})
 		})
 
+		Describe("VerifyHost", func() {
+			var (
+				err error
+				req *http.Request
+			)
+
+			BeforeEach(func() {
+				req, err = http.NewRequest("GET", s.URL()+"/host", nil)
+				Expect(err).ShouldNot(HaveOccurred())
+			})
+
+			When("passed a matcher for host", func() {
+				BeforeEach(func() {
+					s.AppendHandlers(CombineHandlers(
+						VerifyRequest("GET", "/host"),
+						VerifyHost(Equal("my-host")),
+					))
+				})
+
+				It("should verify the host", func() {
+					req.Host = "my-host"
+
+					resp, err = http.DefaultClient.Do(req)
+					Expect(err).ShouldNot(HaveOccurred())
+				})
+
+				It("should reject an invalid host", func() {
+					req.Host = "not-my-host"
+
+					failures := InterceptGomegaFailures(func() {
+						http.DefaultClient.Do(req)
+					})
+					Expect(failures).Should(HaveLen(1))
+				})
+			})
+
+			When("passed a string for host", func() {
+				BeforeEach(func() {
+					s.AppendHandlers(CombineHandlers(
+						VerifyRequest("GET", "/host"),
+						VerifyHost("my-host"),
+					))
+				})
+
+				It("should verify the host", func() {
+					req.Host = "my-host"
+
+					resp, err = http.DefaultClient.Do(req)
+					Expect(err).ShouldNot(HaveOccurred())
+				})
+
+				It("should reject an invalid host", func() {
+					req.Host = "not-my-host"
+
+					failures := InterceptGomegaFailures(func() {
+						http.DefaultClient.Do(req)
+					})
+					Expect(failures).Should(HaveLen(1))
+				})
+			})
+
+		})
+
 		Describe("VerifyBody", func() {
 			BeforeEach(func() {
 				s.AppendHandlers(CombineHandlers(
@@ -588,7 +651,7 @@ var _ = Describe("TestServer", func() {
 
 			It("should verify the json body and the content type", func() {
 				failures := InterceptGomegaFailures(func() {
-					http.Post(s.URL()+"/foo", "application/json", bytes.NewReader([]byte(`[1,3]`)))
+					http.Post(s.URL()+"/foo", "application/json; charset=utf-8", bytes.NewReader([]byte(`[1,3]`)))
 				})
 				Expect(failures).Should(HaveLen(1))
 			})
@@ -604,7 +667,7 @@ var _ = Describe("TestServer", func() {
 				formValues.Add("group", "users")
 			})
 
-			Context("when encoded in the URL", func() {
+			When("encoded in the URL", func() {
 				BeforeEach(func() {
 					s.AppendHandlers(CombineHandlers(
 						VerifyRequest("GET", "/foo"),
@@ -643,7 +706,7 @@ var _ = Describe("TestServer", func() {
 				})
 			})
 
-			Context("when present in the body", func() {
+			When("present in the body", func() {
 				BeforeEach(func() {
 					s.AppendHandlers(CombineHandlers(
 						VerifyRequest("POST", "/foo"),
@@ -684,7 +747,7 @@ var _ = Describe("TestServer", func() {
 		})
 
 		Describe("VerifyFormKV", func() {
-			Context("when encoded in the URL", func() {
+			When("encoded in the URL", func() {
 				BeforeEach(func() {
 					s.AppendHandlers(CombineHandlers(
 						VerifyRequest("GET", "/foo"),
@@ -705,7 +768,7 @@ var _ = Describe("TestServer", func() {
 				})
 			})
 
-			Context("when present in the body", func() {
+			When("present in the body", func() {
 				BeforeEach(func() {
 					s.AppendHandlers(CombineHandlers(
 						VerifyRequest("POST", "/foo"),
@@ -792,7 +855,7 @@ var _ = Describe("TestServer", func() {
 
 					Expect(resp.StatusCode).Should(Equal(http.StatusCreated))
 
-					body, err := ioutil.ReadAll(resp.Body)
+					body, err := gutil.ReadAll(resp.Body)
 					Expect(err).ShouldNot(HaveOccurred())
 					Expect(body).Should(Equal([]byte("sweet")))
 
@@ -801,7 +864,7 @@ var _ = Describe("TestServer", func() {
 
 					Expect(resp.StatusCode).Should(Equal(http.StatusOK))
 
-					body, err = ioutil.ReadAll(resp.Body)
+					body, err = gutil.ReadAll(resp.Body)
 					Expect(err).ShouldNot(HaveOccurred())
 					Expect(body).Should(Equal([]byte("sour")))
 				})
@@ -820,7 +883,7 @@ var _ = Describe("TestServer", func() {
 					Expect(err).ShouldNot(HaveOccurred())
 
 					Expect(resp.StatusCode).Should(Equal(http.StatusCreated))
-					Expect(ioutil.ReadAll(resp.Body)).Should(Equal([]byte("sweet")))
+					Expect(gutil.ReadAll(resp.Body)).Should(Equal([]byte("sweet")))
 					Expect(resp.Header.Get("X-Custom-Header")).Should(Equal("my header"))
 				})
 			})
@@ -854,7 +917,7 @@ var _ = Describe("TestServer", func() {
 
 				Expect(resp.StatusCode).Should(Equal(http.StatusCreated))
 
-				body, err := ioutil.ReadAll(resp.Body)
+				body, err := gutil.ReadAll(resp.Body)
 				Expect(err).ShouldNot(HaveOccurred())
 				Expect(body).Should(Equal([]byte("tasty")))
 
@@ -863,12 +926,12 @@ var _ = Describe("TestServer", func() {
 
 				Expect(resp.StatusCode).Should(Equal(http.StatusCreated))
 
-				body, err = ioutil.ReadAll(resp.Body)
+				body, err = gutil.ReadAll(resp.Body)
 				Expect(err).ShouldNot(HaveOccurred())
 				Expect(body).Should(Equal([]byte("treat")))
 			})
 
-			Context("when passed a nil body", func() {
+			When("passed a nil body", func() {
 				BeforeEach(func() {
 					s.SetHandler(0, CombineHandlers(
 						VerifyRequest("POST", "/foo"),
@@ -881,7 +944,7 @@ var _ = Describe("TestServer", func() {
 
 					Expect(err).ShouldNot(HaveOccurred())
 					Expect(resp.StatusCode).Should(Equal(http.StatusOK))
-					body, err := ioutil.ReadAll(resp.Body)
+					body, err := gutil.ReadAll(resp.Body)
 					Expect(err).ShouldNot(HaveOccurred())
 					Expect(body).Should(BeEmpty())
 
@@ -891,7 +954,7 @@ var _ = Describe("TestServer", func() {
 		})
 
 		Describe("RespondWithJSON", func() {
-			Context("when no optional headers are set", func() {
+			When("no optional headers are set", func() {
 				BeforeEach(func() {
 					s.AppendHandlers(CombineHandlers(
 						VerifyRequest("POST", "/foo"),
@@ -905,7 +968,7 @@ var _ = Describe("TestServer", func() {
 
 					Expect(resp.StatusCode).Should(Equal(http.StatusCreated))
 
-					body, err := ioutil.ReadAll(resp.Body)
+					body, err := gutil.ReadAll(resp.Body)
 					Expect(err).ShouldNot(HaveOccurred())
 					Expect(body).Should(MatchJSON("[1,2,3]"))
 				})
@@ -918,7 +981,7 @@ var _ = Describe("TestServer", func() {
 				})
 			})
 
-			Context("when optional headers are set", func() {
+			When("optional headers are set", func() {
 				var headers http.Header
 				BeforeEach(func() {
 					headers = http.Header{"Stuff": []string{"things"}}
@@ -945,7 +1008,7 @@ var _ = Describe("TestServer", func() {
 					Expect(resp.Header["Content-Type"]).Should(Equal([]string{"application/json"}))
 				})
 
-				Context("when setting the Content-Type explicitly", func() {
+				When("setting the Content-Type explicitly", func() {
 					BeforeEach(func() {
 						headers["Content-Type"] = []string{"not-json"}
 					})
@@ -969,7 +1032,7 @@ var _ = Describe("TestServer", func() {
 			var code int
 			var object testObject
 
-			Context("when no optional headers are set", func() {
+			When("no optional headers are set", func() {
 				BeforeEach(func() {
 					code = http.StatusOK
 					object = testObject{}
@@ -990,7 +1053,7 @@ var _ = Describe("TestServer", func() {
 
 					Expect(resp.StatusCode).Should(Equal(http.StatusCreated))
 
-					body, err := ioutil.ReadAll(resp.Body)
+					body, err := gutil.ReadAll(resp.Body)
 					Expect(err).ShouldNot(HaveOccurred())
 					Expect(body).Should(MatchJSON(`{"Key": "Jim", "Value": "Codes"}`))
 				})
@@ -1003,7 +1066,7 @@ var _ = Describe("TestServer", func() {
 				})
 			})
 
-			Context("when optional headers are set", func() {
+			When("optional headers are set", func() {
 				var headers http.Header
 				BeforeEach(func() {
 					headers = http.Header{"Stuff": []string{"things"}}
@@ -1032,7 +1095,7 @@ var _ = Describe("TestServer", func() {
 					Expect(resp.Header["Content-Type"]).Should(Equal([]string{"application/json"}))
 				})
 
-				Context("when setting the Content-Type explicitly", func() {
+				When("setting the Content-Type explicitly", func() {
 					BeforeEach(func() {
 						headers["Content-Type"] = []string{"not-json"}
 					})
@@ -1056,7 +1119,7 @@ var _ = Describe("TestServer", func() {
 				message.Id = proto.Int32(99)
 			})
 
-			Context("when no optional headers are set", func() {
+			When("no optional headers are set", func() {
 				BeforeEach(func() {
 					s.AppendHandlers(CombineHandlers(
 						VerifyRequest("POST", "/proto"),
@@ -1071,7 +1134,8 @@ var _ = Describe("TestServer", func() {
 					Expect(resp.StatusCode).Should(Equal(http.StatusCreated))
 
 					var received protobuf.SimpleMessage
-					body, err := ioutil.ReadAll(resp.Body)
+					body, err := gutil.ReadAll(resp.Body)
+					Expect(err).ShouldNot(HaveOccurred())
 					err = proto.Unmarshal(body, &received)
 					Expect(err).ShouldNot(HaveOccurred())
 				})
@@ -1084,7 +1148,7 @@ var _ = Describe("TestServer", func() {
 				})
 			})
 
-			Context("when optional headers are set", func() {
+			When("optional headers are set", func() {
 				var headers http.Header
 				BeforeEach(func() {
 					headers = http.Header{"Stuff": []string{"things"}}
@@ -1111,7 +1175,7 @@ var _ = Describe("TestServer", func() {
 					Expect(resp.Header["Content-Type"]).Should(Equal([]string{"application/x-protobuf"}))
 				})
 
-				Context("when setting the Content-Type explicitly", func() {
+				When("setting the Content-Type explicitly", func() {
 					BeforeEach(func() {
 						headers["Content-Type"] = []string{"not-x-protobuf"}
 					})

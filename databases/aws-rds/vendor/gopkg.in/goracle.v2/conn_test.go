@@ -1,38 +1,42 @@
 // Copyright 2017 Tamás Gulácsi
 //
 //
-//    Licensed under the Apache License, Version 2.0 (the "License");
-//    you may not use this file except in compliance with the License.
-//    You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-//    Unless required by applicable law or agreed to in writing, software
-//    distributed under the License is distributed on an "AS IS" BASIS,
-//    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-//    See the License for the specific language governing permissions and
-//    limitations under the License.
+// SPDX-License-Identifier: UPL-1.0 OR Apache-2.0
 
 package goracle
 
 import (
 	"database/sql/driver"
+	"fmt"
+	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"github.com/pkg/errors"
+	errors "golang.org/x/xerrors"
 )
 
 func TestParseConnString(t *testing.T) {
 	wantAt := ConnectionParams{
-		Username: "cc", Password: "c@c*1", SID: "192.168.1.1/cc",
+		Username:       "cc",
+		Password:       "c@c*1",
+		SID:            "192.168.1.1/cc",
+		MaxLifeTime:    DefaultMaxLifeTime,
+		SessionTimeout: DefaultSessionTimeout,
+		WaitTimeout:    DefaultWaitTimeout,
 	}
 	wantDefault := ConnectionParams{
-		Username: "user", Password: "pass", SID: "sid",
-		ConnClass:   DefaultConnectionClass,
-		MinSessions: DefaultPoolMinSessions, MaxSessions: DefaultPoolMaxSessions,
-		PoolIncrement: DefaultPoolIncrement}
+		Username:       "user",
+		Password:       "pass",
+		SID:            "sid",
+		ConnClass:      DefaultConnectionClass,
+		MinSessions:    DefaultPoolMinSessions,
+		MaxSessions:    DefaultPoolMaxSessions,
+		PoolIncrement:  DefaultPoolIncrement,
+		MaxLifeTime:    DefaultMaxLifeTime,
+		SessionTimeout: DefaultSessionTimeout,
+		WaitTimeout:    DefaultWaitTimeout}
 
 	wantXO := wantDefault
 	wantXO.SID = "localhost/sid"
@@ -54,10 +58,11 @@ func TestParseConnString(t *testing.T) {
 		Want ConnectionParams
 	}{
 		"simple": {In: "user/pass@sid", Want: wantDefault},
-		"full": {In: "oracle://user:pass@sid/?poolMinSessions=3&poolMaxSessions=9&poolIncrement=3&connectionClass=POOLED&sysoper=1&sysdba=0",
+		"full": {In: "oracle://user:pass@sid/?poolMinSessions=3&poolMaxSessions=9&poolIncrement=3&connectionClass=POOLED&sysoper=1&sysdba=0&poolWaitTimeout=200ms&poolSessionMaxLifetime=4000s&poolSessionTimeout=2000s",
 			Want: ConnectionParams{Username: "user", Password: "pass", SID: "sid",
 				ConnClass: "POOLED", IsSysOper: true,
-				MinSessions: 3, MaxSessions: 9, PoolIncrement: 3}},
+				MinSessions: 3, MaxSessions: 9, PoolIncrement: 3,
+				WaitTimeout: 200 * time.Millisecond, MaxLifeTime: 4000 * time.Second, SessionTimeout: 2000 * time.Second}},
 
 		"@": {
 			In:   setP(wantAt.String(), wantAt.Password),
@@ -65,6 +70,16 @@ func TestParseConnString(t *testing.T) {
 
 		"xo":            {In: "oracle://user:pass@localhost/sid", Want: wantXO},
 		"heterogeneous": {In: "oracle://user:pass@localhost/sid?heterogeneousPool=1", Want: wantHeterogeneous},
+
+		"ipv6": {
+			In: "oracle://[::1]:12345/dbname",
+			Want: ConnectionParams{
+				SID:         "[::1]:12345/dbname",
+				ConnClass:   "GORACLE",
+				MinSessions: 1, MaxSessions: 1000, PoolIncrement: 1,
+				WaitTimeout: 30 * time.Second, MaxLifeTime: 1 * time.Hour, SessionTimeout: 5 * time.Minute,
+			},
+		},
 	} {
 		t.Log(tCase.In)
 		P, err := ParseConnString(tCase.In)
@@ -94,7 +109,44 @@ func TestParseConnString(t *testing.T) {
 
 func TestMaybeBadConn(t *testing.T) {
 	want := driver.ErrBadConn
-	if got := maybeBadConn(errors.Wrap(want, "bad")); got != want {
+	if got := maybeBadConn(errors.Errorf("bad: %w", want), nil); got != want {
 		t.Errorf("got %v, wanted %v", got, want)
+	}
+}
+
+func TestCalculateTZ(t *testing.T) {
+	for _, tC := range []struct {
+		dbTZ, timezone string
+		off            int
+		err            error
+	}{
+		{dbTZ: "Europe/Budapest", timezone: "+01:00", off: 3600},
+		{dbTZ: "+01:00", off: +3600},
+		{off: 1800, err: io.EOF},
+		{timezone: "+00:30", off: 1800},
+	} {
+		prefix := fmt.Sprintf("%q/%q", tC.dbTZ, tC.timezone)
+		_, off, err := calculateTZ(tC.dbTZ, tC.timezone)
+		t.Log(prefix, off, err)
+		if (err == nil) != (tC.err == nil) {
+			t.Errorf("ERR %s: wanted %v, got %v", prefix, tC.err, err)
+		} else if err == nil && off != tC.off {
+			t.Errorf("ERR %s: got %d, wanted %d.", prefix, off, tC.off)
+		}
+	}
+}
+func TestParseTZ(t *testing.T) {
+	for k, v := range map[string]int{
+		"00:00": 0, "+00:00": 0, "-00:00": 0,
+		"01:00": 3600, "+01:00": 3600, "-01:01": -3660,
+		"+02:03": 7380,
+	} {
+		i, err := parseTZ(k)
+		if err != nil {
+			t.Fatal(errors.Errorf("%s: %w", k, err))
+		}
+		if i != v {
+			t.Errorf("%s. got %d, wanted %d.", k, i, v)
+		}
 	}
 }
