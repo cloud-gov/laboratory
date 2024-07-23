@@ -1,0 +1,10 @@
+ignorePaths:
+# Ignore reason: These files are used for the Gradle wrapper, which is useful for
+# building the project without installing Gradle locally
+- databases/aws-rds-tls/gradle/wrapper/gradle-wrapper.jar
+# Ignore reason: These files are necessary for making an Oracle database connection
+# and used by the Oracle integration tests
+# See https://github.com/cloud-gov/aws-broker/blob/main/ci/pipeline.yml#L1249-L1260
+- databases/aws-rds/include/oracle/libmql1.so
+- databases/aws-rds/include/oracle/libocijdbc19.so
+- databases/aws-rds/include/oracle/liboramysql19.so
