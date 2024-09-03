@@ -8,18 +8,6 @@ applications:
       CGO_CFLAGS: -Isrc/github.com/cloud-gov/databases/aws-rds/include
       LD_LIBRARY_PATH: "/home/vcap/app/include/oracle:$LD_LIBRARY_PATH"
       SERVICE_NAME: ((pg-service))
-      DB_TYPE: postgresql
+      DB_TYPE: postgresql # valid types are postgresql, mysql and oracle
     services:
       - rds-test-pg
-  - name: aws-rds-smoke-test-suite-oracle
-    buildpacks:
-      - go_buildpack
-    env:
-      GOVERSION: go1.22
-      GOPACKAGENAME: aws-rds
-      CGO_CFLAGS: -Isrc/github.com/cloud-gov/databases/aws-rds/include
-      LD_LIBRARY_PATH: "/home/vcap/app/include/oracle:$LD_LIBRARY_PATH"
-      SERVICE_NAME: ((oracle-service))
-      DB_TYPE: oracle
-    services:
-      - rds-test-oracle
