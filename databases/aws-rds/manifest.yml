@@ -9,5 +9,5 @@ applications:
       LD_LIBRARY_PATH: "/home/vcap/app/include/oracle:$LD_LIBRARY_PATH"
       SERVICE_NAME: ((pg-service))
       DB_TYPE: postgresql # valid types are postgresql, mysql and oracle
-    services:
-      - rds-test-pg
+    # services:
+      # - rds-test-pg
