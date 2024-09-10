@@ -7,7 +7,7 @@ applications:
       GOPACKAGENAME: aws-rds
       CGO_CFLAGS: -Isrc/github.com/cloud-gov/databases/aws-rds/include
       LD_LIBRARY_PATH: "/home/vcap/app/include/oracle:$LD_LIBRARY_PATH"
-      SERVICE_NAME: ((pg-service))
+      SERVICE_NAME: ((rds-service))
       DB_TYPE: postgresql # valid types are postgresql, mysql and oracle
     # services:
       # - rds-test-pg
